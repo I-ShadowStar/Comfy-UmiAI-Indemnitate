@@ -67,13 +67,13 @@ To allow the node to control image size (e.g., `@@width=1024@@`), you must conne
 
 | Feature | Syntax | Example |
 | :--- | :--- | :--- |
-| **Random Choice** | `{a|b|c}` | `{Red|Blue|Green}` |
-| **Variables** | `$var={opts}` | `$hair={Red|Blue}` |
+| **Random Choice** | `{a\|b\|c}` | `{Red\|Blue\|Green}` |
+| **Variables** | `$var={opts}` | `$hair={Red\|Blue}` |
 | **Use Variable** | `$var` | `A photo of $hair hair.` |
 | **String Filters** | `$var.filter` | `$var.clean` / `$var.upper` / `$var.title` |
-| **Logic Gate** | `[if Key : A | B]` | `[if Cyberpunk : Techwear | Armor]` |
+| **Logic Gate** | `[if Key : A \| B]` | `[if Cyberpunk : Techwear \| Armor]` |
 | **Danbooru** | `char:name` | `char:frieren` |
-| **Sequential** | `{~a|b|c}` | `{~Front|Side|Back}` |
+| **Sequential** | `{~a\|b\|c}` | `{~Front\|Side\|Back}` |
 | **Set Size** | `@@w=X, h=Y@@` | `@@width=1024, height=1536@@` |
 | **Negatives** | `**text**` | `A landscape **text, watermark**` |
 | **Comments** | `//` or `#` | `// This is a comment` |
