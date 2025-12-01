@@ -149,7 +149,7 @@ A-Rank Party - Silk Outfit:
   Suffix:
     - 
 ```
-**Usage:** Type `<` to select `<[Demihuman]>` and randomly choose a prompt between any of the YAML entries using `<[Demihumn]>` as a tag.
+**Usage:** Type `<` to select `<[Demihuman]>` and randomly choose a prompt between any of the YAML entries using `<[Demihuman]>` as a tag.
 
 ---
 
