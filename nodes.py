@@ -59,7 +59,7 @@ def parse_wildcard_range(range_str, num_variants):
 
 def process_wildcard_range(tag, lines):
     if not lines: return ""
-    if tag.startswith('#'): return None
+    if tag.startswith('#'): return "" # Fixed: Return empty string instead of None
     
     if "$$" not in tag:
         selected = random.choice(lines)
@@ -243,9 +243,10 @@ class TagSelector:
             if isinstance(selected, str) and '#' in selected:
                 selected = selected.split('#')[0].strip()
 
-        return selected
+        return selected if selected is not None else ""
 
     def resolve_wildcard_recursively(self, value, seed_id=None):
+        if not value: return ""
         if value.startswith('__') and value.endswith('__'):
             nested_tag = value[2:-2]
             nested_seed = f"{seed_id}_{nested_tag}" if seed_id else None
@@ -321,7 +322,8 @@ class TagSelector:
         if groups: return self.get_tag_group_choice(parsed_tag, groups, tags)
         if tags: return self.get_tag_choice(parsed_tag, tags)
         
-        return None 
+        # FIXED: Return empty string instead of None if tag not found
+        return "" 
 
     def get_prefixes_and_suffixes(self):
         prefixes, suffixes, neg_p, neg_s = [], [], [], []
