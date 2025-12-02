@@ -191,9 +191,9 @@ const HELP_HTML = `
                 <h4 style="margin-top:0">🎲 Dynamic Prompts</h4>
                 <table class="umi-table">
                     <tr><td><span class="umi-code">{a|b}</span></td><td>Random choice.</td></tr>
+                    <tr><td><span class="umi-code">{a|b} ... {1|2}</span></td><td><strong>Sync:</strong> 2 lists of equal size will always match indices.</td></tr>
                     <tr><td><span class="umi-code">{2$$a|b|c}</span></td><td>Pick 2 unique.</td></tr>
                     <tr><td><span class="umi-code">{1-3$$a|b|c}</span></td><td>Pick 1 to 3.</td></tr>
-                    <tr><td><span class="umi-code">{50%a|b}</span></td><td>50% chance 'a', else 'b'.</td></tr>
                     <tr><td><span class="umi-code">{~a|b|c}</span></td><td><strong>Sequential:</strong> Cycles by Seed.</td></tr>
                 </table>
             </div>
@@ -201,7 +201,7 @@ const HELP_HTML = `
                 <h4 style="margin-top:0">🎛️ Tools & Logic</h4>
                 <table class="umi-table">
                     <tr><td><span class="umi-code">$var={...}</span></td><td>Define variable.</td></tr>
-                    <tr><td><span class="umi-code">[if K: A | B]</span></td><td>Logic Gate.</td></tr>
+                    <tr><td><span class="umi-code">[if K : A | B]</span></td><td>Logic Gate.</td></tr>
                     <tr><td><span class="umi-code">&lt;lora:name:1.0&gt;</span></td><td>Load LoRA (Auto).</td></tr>
                     <tr><td><span class="umi-code">@@w=1024@@</span></td><td>Set Resolution.</td></tr>
                     <tr><td><span class="umi-code">**text**</span></td><td>Move to Negative.</td></tr>
@@ -277,8 +277,10 @@ $hair={Blonde|Red|Neon Pink}
 A photo of a woman with $hair hair. The wind blows her $hair hair.</div>
 
         <div class="callout callout-info">
-            <strong>✨ String Filters:</strong> Modify the variable output using dot notation.<br>
-            <code>$var.clean</code> (Remove underscores) • <code>$var.upper</code> (UPPERCASE) • <code>$var.title</code> (Capitalize)
+            <strong>📸 The "Snapshot" Rule:</strong><br>
+            Variables are resolved <strong>ONCE</strong> when defined. They are static snapshots. You can use __wildcard__ in a variable to ALWAYS roll one specific outcome throughout your prompt.<br>
+            Wildcards (<code>__file__</code>) are resolved <strong>EVERY TIME</strong> they are used.<br>
+            Use variables for consistency (Eyes/Hair). Use Wildcards for chaos (Backgrounds).
         </div>
     </div>
 
@@ -293,10 +295,10 @@ $class={Knight|Cyberpunk}
 [if Knight : holding a sword | holding a laser gun]</div>
 
         <div class="callout callout-warn">
-            <strong>⚠️ ORDER OF OPERATIONS (CRITICAL)</strong><br>
-            Logic runs <strong>AFTER</strong> variables are resolved. It scans the final text.<br>
-            If you use <code>$var.clean</code>, your variable <code>Neon_City</code> becomes <code>Neon City</code>.<br>
-            Your Logic check must match the output: <code>[if Neon City : ...]</code> (Space, not underscore).
+            <strong>⚠️ CRITICAL SYNTAX RULE: The "Pipe Conflict"</strong><br>
+            Never use the pipe <code>|</code> symbol inside a variable definition.<br>
+            ❌ <code>$var = { [if A : x | y] }</code> (Breaks the parser)<br>
+            ✅ <code>$var = { [if A : x] [if B : y] }</code> (Split logic works perfectly!)
         </div>
     </div>
 
@@ -316,19 +318,33 @@ $class={Knight|Cyberpunk}
         <p>Copy-paste these blocks to test the full power of the node.</p>
         
         <details>
-            <summary>🧪 The "Context-Aware" Character</summary>
-            <div class="umi-block">$genre={High Fantasy|Cyberpunk|Post-Apocalyptic}
-$view={~Portrait|Landscape}
+            <summary>🧪 The RPG Generator (Advanced)</summary>
+            <div class="umi-block">// 1. Synchronized Arrays (Deterministic Randomness)
+// Since both have 2 options, they will always pick the same index (e.g., 1 & 1 or 2 & 2)
+$class = {Paladin|Necromancer}
+$weapon = {hammer|scythe}
+$magic = {holy golden light|dark purple mist}
 
-// Logic: Set resolution based on View
-[if Portrait: @@width=1024, height=1536@@][if Landscape: @@width=1536, height=1024@@]
+// 2. Formatting & Logic
+// We use .title to make it look nice. We add .break to the ID to allow underscores.
+Character: $class
+Weapon Display: $class.title $weapon.title
+Filename ID: $class.break_$weapon
 
-(Masterpiece), A $view of a warrior, female.
-She is wearing [if Fantasy: plate armor][if Cyberpunk: tech jacket][if Post-Apocalyptic: rags].
-She is holding [if Fantasy: a sword | [if Cyberpunk: a pistol | a crowbar]].
+// 3. Effect
+Effect: glowing with $magic</div>
+        </details>
+        
+        <details>
+             <summary>🧪 The "Context-Aware" LoRA Switcher</summary>
+             <div class="umi-block">$style = {Anime|Photorealistic}
 
-The background is a $genre landscape.
-**watermark, text, blurry, nsfw**</div>
+// Logic: Load different LoRAs based on the random style
+// Note: We use split [if] blocks to avoid the pipe syntax trap inside variables!
+$lora_setup = { [if Anime : <lora:AnimeOutline:1.0>] [if Photorealistic : <lora:SkinTexture:0.8>] }
+
+$lora_setup
+A $style portrait of a girl.</div>
         </details>
     </div>
 `;
@@ -349,7 +365,7 @@ function showHelpModal() {
         <div class="umi-help-content">
             <div class="umi-help-header">
                 <div>
-                    <h2>📘 UmiAI Reference Manual <span class="version">v1.0</span></h2>
+                    <h2>📘 UmiAI Reference Manual <span class="version">v1.1</span></h2>
                 </div>
                 <button class="umi-help-close" onclick="this.closest('.umi-help-modal').remove()">CLOSE</button>
             </div>
