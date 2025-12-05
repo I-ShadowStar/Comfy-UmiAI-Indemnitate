@@ -14,6 +14,10 @@ import comfy.utils
 import torch 
 from safetensors import safe_open 
 
+# API Imports
+import server
+from aiohttp import web
+
 # ==============================================================================
 # GLOBAL CACHE (Enables Refreshing)
 # ==============================================================================
@@ -126,10 +130,14 @@ def process_wildcard_range(tag, lines):
 
 class TagLoader:
     def __init__(self, wildcard_path, options):
-        self.files = []
         self.wildcard_location = wildcard_path
         self.loaded_tags = {}
         self.yaml_entries = {}
+        
+        # Explicit Index for fast lookups (Fixes performance on globbing)
+        self.files_index = set() 
+        self.index_built = False
+        
         # Options
         self.ignore_paths = options.get('ignore_paths', True)
         self.verbose = options.get('verbose', False)
@@ -138,6 +146,8 @@ class TagLoader:
         # If refreshing, clear the global cache
         if self.force_refresh:
             GLOBAL_CACHE.clear()
+            self.files_index.clear()
+            self.index_built = False
             if self.verbose: print("[UmiAI] Cache cleared. Refreshing files...")
 
         # Initialize explicit mappings for direct file access
@@ -158,6 +168,46 @@ class TagLoader:
                     self.yaml_basename_to_path[basename] = full_path
                 elif name_lower.endswith('.csv'):
                     self.csv_basename_to_path[basename] = full_path
+
+    def build_index(self):
+        """
+        Scans directory. 
+        - TXT/CSV: Only indexes the filename/filepath (Clean Autocomplete).
+        - YAML: Loads and indexes internal keys (Deep Autocomplete).
+        """
+        if self.index_built and not self.force_refresh:
+            return
+
+        new_index = set()
+        
+        for root, dirs, files in os.walk(self.wildcard_location):
+            for file in files:
+                fp = os.path.join(root, file)
+                rel_path = os.path.relpath(fp, self.wildcard_location)
+                # Normalize slashes for consistency across OS
+                clean_key = os.path.splitext(rel_path)[0].replace(os.sep, '/')
+                
+                # --- CASE 1: TXT & CSV (Filename Only) ---
+                # We strictly DO NOT read the content of these files for the index.
+                if file.endswith('.txt') or file.endswith('.csv'):
+                    new_index.add(clean_key)
+                    if self.ignore_paths:
+                        new_index.add(os.path.basename(clean_key))
+                
+                # --- CASE 2: YAML (Internal Keys) ---
+                # We must read YAMLs to find the Umi/Nested keys inside.
+                elif file.endswith('.yaml'):
+                    if file == 'globals.yaml': continue
+                    try:
+                        data = self.load_tags(clean_key, cache_files=True)
+                        if isinstance(data, dict):
+                            for k in data.keys():
+                                new_index.add(k)
+                    except Exception:
+                        pass
+
+        self.files_index = new_index
+        self.index_built = True
 
     def load_globals(self):
         global_path = os.path.join(self.wildcard_location, 'globals.yaml')
@@ -201,8 +251,6 @@ class TagLoader:
     def is_umi_format(self, data):
         """
         Heuristic: Checks if the YAML structure matches Umi/Flat format.
-        Looks for keys: 'Prompts', 'Description', 'Tags', 'Prefix', 'Suffix'
-        in the first dictionary value found.
         """
         if not isinstance(data, dict):
             return False
@@ -239,8 +287,6 @@ class TagLoader:
         elif os.path.isfile(txt_match): real_path = txt_match
         elif os.path.isfile(yaml_match): real_path = yaml_match
 
-        key = ALL_KEY if file_path == ALL_KEY else (os.path.basename(file_path.lower()) if self.ignore_paths else file_path)
-
         # --- CSV Handling ---
         if real_path and real_path.endswith('.csv'):
              with open(real_path, 'r', encoding='utf-8') as f:
@@ -255,67 +301,6 @@ class TagLoader:
                 lines = read_file_lines(file)
                 GLOBAL_CACHE[cache_key] = lines
                 return lines
-
-        # --- LOAD ALL FILES (YAML, TXT, CSV) ---
-        if key is ALL_KEY:
-            output = {}
-            
-            # Use os.walk for robust directory traversal
-            for root, dirs, files in os.walk(self.wildcard_location):
-                for file in files:
-                    fp = os.path.join(root, file)
-                    rel_path = os.path.relpath(fp, self.wildcard_location)
-                    # Normalize slashes for consistency across OS
-                    clean_key = os.path.splitext(rel_path)[0].replace(os.sep, '/')
-                    base_key = os.path.basename(clean_key)
-                    
-                    if file.endswith('.txt'):
-                        try:
-                            with open(fp, encoding="utf8") as f:
-                                lines = read_file_lines(f)
-                                # IMPORTANT: Only add to index if file is NOT empty
-                                if lines:
-                                    output[clean_key] = lines
-                                    if base_key not in output: output[base_key] = lines
-                        except Exception as e:
-                            if verbose: print(f'Error TXT {fp}: {e}')
-
-                    elif file.endswith('.yaml'):
-                        if file == 'globals.yaml': continue
-                        try:
-                            with open(fp, encoding="utf8") as f:
-                                data = yaml.safe_load(f)
-                                if isinstance(data, dict):
-                                    if self.is_umi_format(data):
-                                        for title, entry in data.items():
-                                            if isinstance(entry, dict):
-                                                processed_entry = self.process_yaml_entry(title, entry)
-                                                if processed_entry['tags']:
-                                                    output[title] = set(processed_entry['tags'])
-                                                    self.yaml_entries[title] = processed_entry
-                                            elif isinstance(entry, list) and entry:
-                                                output[title] = entry
-                                    else:
-                                        flattened = self.flatten_hierarchical_yaml(data)
-                                        # Filter out empty lists from flattened data
-                                        clean_flattened = {k: v for k, v in flattened.items() if v}
-                                        output.update(clean_flattened)
-                        except Exception as e:
-                            if verbose: print(f'Error YAML {fp}: {e}')
-                            
-                    elif file.endswith('.csv'):
-                         try:
-                            with open(fp, 'r', encoding='utf-8') as f:
-                                reader = csv.DictReader(f)
-                                rows = list(reader)
-                                if rows:
-                                    output[clean_key] = rows
-                                    if base_key not in output: output[base_key] = rows
-                         except Exception as e:
-                             if verbose: print(f'Error CSV {fp}: {e}')
-
-            GLOBAL_CACHE[cache_key] = output
-            return output
 
         # --- YAML Handling (Specific File) ---
         if real_path and real_path.endswith('.yaml'):
@@ -342,32 +327,13 @@ class TagLoader:
                 except Exception as e:
                     if verbose: print(f'Error parsing YAML {real_path}: {e}')
 
-        # Try to find key in ALL_KEY logic if not found directly
-        if ALL_KEY in GLOBAL_CACHE:
-            all_data = GLOBAL_CACHE[ALL_KEY]
-            if file_path in all_data:
-                return all_data[file_path]
-
-        # Force load all if specific file not found (allows virtual keys from nested yamls)
-        if not GLOBAL_CACHE.get(ALL_KEY):
-             self.load_tags(ALL_KEY, verbose, cache_files)
-             all_data = GLOBAL_CACHE.get(ALL_KEY, {})
-             if file_path in all_data:
-                 return all_data[file_path]
-        else:
-             all_data = GLOBAL_CACHE.get(ALL_KEY, {})
-             if file_path in all_data:
-                 return all_data[file_path]
-
         return []
 
     def get_glob_matches(self, pattern):
-        # Ensure ALL tags are loaded to perform a global search
-        all_tags = self.load_tags(ALL_KEY, self.verbose, self.force_refresh)
-        if not all_tags: return []
-        
-        # Use fnmatch to filter keys based on the glob pattern
-        return fnmatch.filter(all_tags.keys(), pattern)
+        # Ensure index is built before filtering
+        self.build_index()
+        # Fast filter against set strings in memory
+        return fnmatch.filter(self.files_index, pattern)
 
     def get_entry_details(self, title):
         return self.yaml_entries.get(title)
@@ -533,13 +499,12 @@ class TagSelector:
         if '*' in parsed_tag or '?' in parsed_tag:
             matches = self.tag_loader.get_glob_matches(parsed_tag)
             if matches:
-                # Retry loop to find a non-empty result (up to 20 times)
-                for _ in range(20):
-                    selected_key = random.choice(matches)
+                # Optimized: Shuffle and iterate until we find a valid return.
+                random.shuffle(matches)
+                for selected_key in matches:
                     result = self.select(selected_key, groups)
                     if result and str(result).strip():
                         return result
-            # If nothing worked after retries, return empty string
             return ""
 
         sequential = False
@@ -1048,7 +1013,7 @@ class UmiAIWildcardNode:
             "required": {
                 "text": ("STRING", {"multiline": True, "dynamicPrompts": False}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
-                "autorefresh": (["Yes", "No"],),
+                "refresh_mode": (["No (Cached)", "Yes (Always)"],),
             },
             "optional": {
                 "model": ("MODEL",),
@@ -1193,7 +1158,7 @@ class UmiAIWildcardNode:
             print(f"[UmiAI] LLM Error: {e}")
             return text
 
-    def process(self, text, seed, autorefresh, width, height, 
+    def process(self, text, seed, refresh_mode, width, height, 
                 model=None, clip=None, 
                 lora_tags_behavior="Append to Prompt", 
                 llm_prompt_enhancer="No", 
@@ -1230,7 +1195,7 @@ class UmiAIWildcardNode:
             'cache_files': True, # We handle caching manually now via force_refresh
             'ignore_paths': True, 
             'seed': seed,
-            'force_refresh': (autorefresh == "Yes")
+            'force_refresh': (refresh_mode == "Yes (Always)")
         }
 
         tag_loader = TagLoader(self.wildcards_path, options)
@@ -1337,3 +1302,21 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "UmiAIWildcardNode": "UmiAI Wildcard Processor"
 }
+
+# ==============================================================================
+# API ENDPOINT FOR AUTOCOMPLETE
+# ==============================================================================
+@server.PromptServer.instance.routes.get("/umiapp/wildcards")
+async def get_wildcards(request):
+    # Initialize a temporary loader just to build the index
+    # We use the default wildcards path
+    wildcards_path = os.path.join(os.path.dirname(__file__), "wildcards")
+    options = {'ignore_paths': True, 'verbose': False}
+    
+    loader = TagLoader(wildcards_path, options)
+    loader.build_index()
+    
+    # Sort for better UI experience
+    sorted_keys = sorted(list(loader.files_index))
+    
+    return web.json_response(sorted_keys)

@@ -1,7 +1,7 @@
 import { app } from "../../scripts/app.js";
 
 // =============================================================================
-// PART 1: AUTOCOMPLETE LOGIC
+// PART 1: AUTOCOMPLETE LOGIC (Enhanced with Keyboard Navigation)
 // =============================================================================
 
 class AutoCompletePopup {
@@ -11,65 +11,122 @@ class AutoCompletePopup {
             position: "absolute",
             display: "none",
             backgroundColor: "#1e1e1e",
-            border: "1px solid #444",
+            border: "1px solid #61afef", // Blue border to indicate active state
             zIndex: "9999",
             maxHeight: "250px",
             overflowY: "auto",
             color: "#e0e0e0",
             fontFamily: "'Consolas', 'Monaco', monospace",
             fontSize: "13px",
-            borderRadius: "6px",
-            boxShadow: "0 10px 25px rgba(0,0,0,0.5)",
-            minWidth: "200px"
+            borderRadius: "4px",
+            boxShadow: "0 10px 25px rgba(0,0,0,0.8)",
+            minWidth: "250px"
         });
         document.body.appendChild(this.element);
+        
         this.visible = false;
+        this.items = [];
+        this.selectedIndex = 0;
+        this.onSelectCallback = null;
     }
 
     show(x, y, options, onSelect) {
-        this.element.innerHTML = "";
+        this.items = options;
+        this.onSelectCallback = onSelect;
+        this.selectedIndex = 0; // Reset selection to top
+        this.visible = true;
+
         this.element.style.left = x + "px";
         this.element.style.top = y + "px";
         this.element.style.display = "block";
-        this.visible = true;
-
-        if (options.length === 0) {
-            this.hide();
-            return;
-        }
-
-        const header = document.createElement("div");
-        header.style.padding = "4px 8px";
-        header.style.fontSize = "11px";
-        header.style.color = "#888";
-        header.style.borderBottom = "1px solid #333";
-        header.style.backgroundColor = "#252525";
-        header.innerText = options.length > 50 ? `Showing 50 of ${options.length} matches...` : "Suggestions";
-        this.element.appendChild(header);
-
-        options.slice(0, 50).forEach(opt => {
-            const div = document.createElement("div");
-            div.innerText = opt;
-            div.style.cursor = "pointer";
-            div.style.padding = "6px 10px";
-            div.style.borderBottom = "1px solid #2a2a2a";
-            div.style.transition = "background 0.1s";
-            
-            div.onmouseover = () => div.style.backgroundColor = "#2d4f6c"; 
-            div.onmouseout = () => div.style.backgroundColor = "transparent";
-            
-            div.onmousedown = (e) => {
-                e.preventDefault(); 
-                onSelect(opt);
-                this.hide();
-            };
-            this.element.appendChild(div);
-        });
+        this.render();
     }
 
     hide() {
         this.element.style.display = "none";
         this.visible = false;
+        this.items = [];
+    }
+
+    render() {
+        this.element.innerHTML = "";
+
+        // Header
+        const header = document.createElement("div");
+        Object.assign(header.style, {
+            padding: "4px 8px", fontSize: "11px", color: "#888",
+            borderBottom: "1px solid #333", backgroundColor: "#252525"
+        });
+        header.innerText = this.items.length > 50 
+            ? `Showing 50 of ${this.items.length} matches...` 
+            : `${this.items.length} Suggestions`;
+        this.element.appendChild(header);
+
+        // List Items
+        this.items.slice(0, 50).forEach((opt, index) => {
+            const div = document.createElement("div");
+            div.innerText = opt;
+            
+            // Base Styles
+            Object.assign(div.style, {
+                cursor: "pointer", padding: "6px 10px",
+                borderBottom: "1px solid #2a2a2a", transition: "background 0.05s"
+            });
+
+            // Highlight Selected
+            if (index === this.selectedIndex) {
+                div.style.backgroundColor = "#2d4f6c"; // Selected Blue
+                div.style.color = "#fff";
+                div.style.borderLeft = "3px solid #61afef";
+            } else {
+                div.style.backgroundColor = "transparent";
+                div.style.borderLeft = "3px solid transparent";
+            }
+            
+            // Mouse Interaction
+            div.onmouseover = () => {
+                this.selectedIndex = index;
+                this.render(); // Re-render to update highlights
+            };
+            
+            div.onmousedown = (e) => {
+                e.preventDefault(); 
+                this.triggerSelection();
+            };
+            
+            this.element.appendChild(div);
+        });
+
+        // Auto-Scroll to keep selection in view
+        if (this.element.children[this.selectedIndex + 1]) {
+            const activeEl = this.element.children[this.selectedIndex + 1];
+            // Simple logic to keep element in view
+            if (activeEl.offsetTop < this.element.scrollTop) {
+                this.element.scrollTop = activeEl.offsetTop;
+            } else if (activeEl.offsetTop + activeEl.offsetHeight > this.element.scrollTop + this.element.offsetHeight) {
+                this.element.scrollTop = activeEl.offsetTop + activeEl.offsetHeight - this.element.offsetHeight;
+            }
+        }
+    }
+
+    // Keyboard Navigation Handlers
+    navigate(direction) {
+        if (!this.visible) return;
+        
+        const max = Math.min(this.items.length, 50) - 1;
+        if (direction === 1) {
+            this.selectedIndex = this.selectedIndex >= max ? 0 : this.selectedIndex + 1;
+        } else {
+            this.selectedIndex = this.selectedIndex <= 0 ? max : this.selectedIndex - 1;
+        }
+        this.render();
+    }
+
+    triggerSelection() {
+        if (this.visible && this.items[this.selectedIndex] && this.onSelectCallback) {
+            this.onSelectCallback(this.items[this.selectedIndex]);
+            this.hide();
+        }
     }
 }
 
@@ -170,10 +227,10 @@ const HELP_HTML = `
             </div>
             
             <div class="callout callout-info" style="margin-top: 0;">
-                <h4 style="margin-top:0">Step 2: Prompts & Resolution</h4>
+                <h4 style="margin-top:0">Step 2: Prompts & Hot-Swapping</h4>
                 <ul class="step-list">
                     <li>Connect <strong>Text/Negative</strong> outputs to your CLIP Text Encodes.</li>
-                    <li><strong>Resolution Control:</strong> Right-Click 'Empty Latent Image' &#10142; Convert width/height to input. Connect the wires.</li>
+                    <li><strong>Hot-Swap Files:</strong> Added a new wildcard? Set <code>autorefresh</code> to <strong>"Yes"</strong>, queue once, then set back to "No". No restart needed!</li>
                 </ul>
             </div>
         </div>
@@ -193,8 +250,8 @@ const HELP_HTML = `
                     <tr><td><span class="umi-code">{a|b}</span></td><td>Random choice.</td></tr>
                     <tr><td><span class="umi-code">{a|b} ... {1|2}</span></td><td><strong>Sync:</strong> 2 lists of equal size will always match indices.</td></tr>
                     <tr><td><span class="umi-code">{2$$a|b|c}</span></td><td>Pick 2 unique.</td></tr>
-                    <tr><td><span class="umi-code">{1-3$$a|b|c}</span></td><td>Pick 1 to 3.</td></tr>
-                    <tr><td><span class="umi-code">{~a|b|c}</span></td><td><strong>Sequential:</strong> Cycles by Seed.</td></tr>
+                    <tr><td><span class="umi-code">__*__</span></td><td><strong>Wildcard Wildcard:</strong> Pick from ANY file.</td></tr>
+                    <tr><td><span class="umi-code">__folder/*__</span></td><td>Pick any file in 'folder'.</td></tr>
                 </table>
             </div>
             <div>
@@ -207,7 +264,6 @@ const HELP_HTML = `
                     <tr><td><span class="umi-code">text --neg: bad</span></td><td>Scoped Negative.</td></tr>
                     <tr><td><span class="umi-code">&lt;lora:name:1.0&gt;</span></td><td>Load LoRA (Auto).</td></tr>
                     <tr><td><span class="umi-code">@@width=768...@@</span></td><td>Set Resolution.</td></tr>
-                    <tr><td><span class="umi-code">**text**</span></td><td>Move to Negative.</td></tr>
                 </table>
             </div>
         </div>
@@ -255,7 +311,7 @@ A photo of a cat, $style</div>
     
     <div class="umi-section">
         <h3>📂 Creating & Using Wildcards</h3>
-        <p>You can create your own lists in the <code>wildcards/</code> folder and use them in ComfyUI.</p>
+        <p>You can create your own lists in the <code>wildcards/</code> folder. The system now supports <strong>Hot-Swapping</strong> (using autorefresh) and <strong>Recursive Scanning</strong> (files in subfolders work!).</p>
         
         <div class="umi-grid-2">
             <div>
@@ -264,49 +320,46 @@ A photo of a cat, $style</div>
                 <div class="umi-block">Red
 Blue
 Green</div>
-                <p><strong>Usage:</strong> Type <code>__</code> to trigger autocomplete.</p>
-                <div class="umi-block">A beautiful __colors__ dress.</div>
+                <p><strong>Usage:</strong></p>
+                <div class="umi-block">A __colors__ dress.</div>
             </div>
             
             <div>
                 <h4>2. Advanced Tag Lists (.yaml)</h4>
-                <p>Create a file named <code>wildcards/styles.yaml</code>:</p>
-                <div class="umi-block">Crimson Fire:
-  Prompts:
-    - "crimson red, blazing fire texture"
-    - "deep ruby red, glowing embers"
-  Tags:
-    - color
-    - red</div>
-                <p><strong>Usage:</strong> Type <code>&lt;</code> to trigger autocomplete.</p>
-                <div class="umi-block">&lt;[red]&gt; background.</div>
+                <p>The node <strong>auto-detects</strong> two formats:</p>
+                <div class="umi-block">// Format A: Umi (Entry-Based)
+Crimson:
+  Prompts: ["red fire"]
+  Tags: [fire]
+
+// Format B: Nested (Folder-Like)
+clothes:
+  bottoms:
+    - jeans
+    - skirt</div>
+                <p style="font-size:12px">Usage: <code>&lt;[Crimson]&gt;</code> or <code>__clothes/bottoms__</code></p>
             </div>
+        </div>
+
+        <div class="callout callout-success">
+            <strong>🌟 New: "Wildcard Wildcards" (Globbing)</strong><br>
+            Use <code>*</code> to pick from multiple files at once. This works on TXT, CSV, and YAML keys!<br>
+            • <code>__*__</code> : Pick a random line from <strong>EVERY</strong> file found.<br>
+            • <code>__style/*__</code> : Pick from any file inside the "style" folder (or starting with "style").<br>
+            • <code>__char/*/outfit__</code> : Great for nested YAMLs (e.g., char/rin/outfit).
         </div>
         
         <div style="margin-top: 20px;">
             <h4>3. CSV Data Injection (Correlated Variables)</h4>
             <p>Use <code>.csv</code> files to link multiple attributes together (e.g. Ensuring a "Paladin" always has "Plate Armor"). The node picks a <strong>single random row</strong> and maps the headers to variables.</p>
             
-            <div class="umi-grid-2">
-                <div>
-                     <p><strong>Step 1: The File (wildcards/card.csv)</strong></p>
-                     <table class="umi-table" style="margin-bottom:5px">
-                        <tr><th style="color:#98c379">name</th><th style="color:#98c379">weapon</th><th style="color:#98c379">armor</th></tr>
-                        <tr><td>Paladin</td><td>Hammer</td><td>Plate</td></tr>
-                        <tr><td>Rogue</td><td>Dagger</td><td>Leather</td></tr>
-                     </table>
-                     <p style="font-size:11px; opacity:0.7">*The Header Row (Row 1) defines the variable names.</p>
-                </div>
-                <div>
-                     <p><strong>Step 2: The Usage</strong></p>
-                     <div class="umi-block">// 1. Trigger the file to lock in a random row
+            <div class="umi-block">// 1. Trigger the file to lock in a random row
 __card.csv__
 
 // 2. Use the headers as variables
 A fantasy $name holding a $weapon, wearing $armor.</div>
-                </div>
-            </div>
         </div>
+    </div>
 
     <div class="umi-section">
         <h3>💾 Variables & Persistence</h3>
@@ -320,7 +373,7 @@ A photo of a woman with $hair hair. The wind blows her $hair hair.</div>
 
         <div class="callout callout-info">
             <strong>📸 The "Snapshot" Rule:</strong><br>
-            Variables are resolved <strong>ONCE</strong> when defined. They are static snapshots. You can use __wildcard__ in a variable to ALWAYS roll one specific outcome throughout your prompt.<br>
+            Variables are resolved <strong>ONCE</strong> when defined. They are static snapshots.<br>
             Wildcards (<code>__file__</code>) are resolved <strong>EVERY TIME</strong> they are used.<br>
             Use variables for consistency (Eyes/Hair). Use Wildcards for chaos (Backgrounds).
         </div>
@@ -435,7 +488,7 @@ function showHelpModal() {
         <div class="umi-help-content">
             <div class="umi-help-header">
                 <div>
-                    <h2>📘 UmiAI Reference Manual <span class="version">v1.2</span></h2>
+                    <h2>📘 UmiAI Reference Manual <span class="version">v1.3</span></h2>
                 </div>
                 <button class="umi-help-close" onclick="this.closest('.umi-help-modal').remove()">CLOSE</button>
             </div>
@@ -454,8 +507,19 @@ function showHelpModal() {
 app.registerExtension({
     name: "UmiAI.WildcardSystem",
     async setup() {
-        const resp = await fetch("/umi/wildcards");
-        this.data = await resp.json();
+        // Fetch from the correct endpoint (matches your new Python)
+        try {
+            const resp = await fetch("/umiapp/wildcards");
+            if (resp.ok) {
+                // Returns flat array: ["clothes/pants", "style/anime", ...]
+                this.wildcards = await resp.json(); 
+            } else {
+                this.wildcards = [];
+            }
+        } catch (e) {
+            console.error("[UmiAI] Failed to load wildcards:", e);
+            this.wildcards = [];
+        }
         this.popup = new AutoCompletePopup();
     },
 
@@ -483,11 +547,9 @@ app.registerExtension({
             const llmWidgets = ["llm_model", "llm_temperature", "llm_max_tokens", "custom_system_prompt"];
             const triggerName = "llm_prompt_enhancer";
             
-            // Find the widgets
             const triggerWidget = this.widgets.find(w => w.name === triggerName);
             
             if (triggerWidget) {
-                // 1. Store original widget properties (so we can restore them later)
                 this.widgets.forEach(w => {
                     if (llmWidgets.includes(w.name)) {
                         w.origType = w.type;
@@ -495,114 +557,136 @@ app.registerExtension({
                     }
                 });
 
-                // 2. Define the toggle function
                 const refreshWidgets = () => {
                     const visible = triggerWidget.value === "Yes";
                     let changed = false;
 
                     for (const w of this.widgets) {
                         if (llmWidgets.includes(w.name)) {
-                            // Case A: Show widgets (Restore type)
                             if (visible && w.type === "hidden") {
                                 w.type = w.origType;
                                 w.computeSize = w.origComputeSize;
                                 changed = true;
-                            } 
-                            // Case B: Hide widgets (Change type to hidden & collapse size)
-                            else if (!visible && w.type !== "hidden") {
+                            } else if (!visible && w.type !== "hidden") {
                                 w.type = "hidden";
-                                w.computeSize = () => [0, -4]; // Negative height collapses the gap
+                                w.computeSize = () => [0, -4]; 
                                 changed = true;
                             }
                         }
                     }
-                    
-                    // Force node redraw if layout changed
-                    if (changed) {
-                        this.setSize(this.computeSize());
-                    }
+                    if (changed) this.setSize(this.computeSize());
                 };
 
-                // 3. Attach callback and run once
                 const prevCallback = triggerWidget.callback;
                 triggerWidget.callback = (value) => {
                     if(prevCallback) prevCallback(value);
                     refreshWidgets();
                 };
-                
-                // Run immediately to set initial state
                 refreshWidgets();
             }
 
             // ============================================================
-            // AUTOCOMPLETE LOGIC (EXISTING)
+            // AUTOCOMPLETE LOGIC (WITH ARROW KEYS)
             // ============================================================
             const textWidget = this.widgets.find(w => w.name === "text");
             if (!textWidget || !textWidget.inputEl) return;
 
-            textWidget.inputEl.addEventListener("keyup", (e) => {
-                const cursor = textWidget.inputEl.selectionStart;
-                const text = textWidget.inputEl.value;
+            const inputEl = textWidget.inputEl;
+            const ext = app.extensions.find(e => e.name === "UmiAI.WildcardSystem");
+
+            // 1. INTERCEPT NAVIGATION (Arrow Keys, Enter, Tab)
+            inputEl.addEventListener("keydown", (e) => {
+                if (ext.popup.visible) {
+                    if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        ext.popup.navigate(1); // Next
+                        return;
+                    } 
+                    if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        ext.popup.navigate(-1); // Prev
+                        return;
+                    }
+                    if (e.key === "Enter" || e.key === "Tab") {
+                        e.preventDefault();
+                        ext.popup.triggerSelection();
+                        return;
+                    }
+                    if (e.key === "Escape") {
+                        ext.popup.hide();
+                        return;
+                    }
+                }
+            });
+
+            // 2. LISTEN FOR TYPING (To show the popup)
+            inputEl.addEventListener("keyup", (e) => {
+                // Ignore nav keys in this listener to prevent flashing
+                if (["ArrowUp", "ArrowDown", "Enter", "Escape"].includes(e.key)) return;
+
+                const cursor = inputEl.selectionStart;
+                const text = inputEl.value;
                 const beforeCursor = text.substring(0, cursor);
 
+                // Regex Config
                 const matchFile = beforeCursor.match(/__([\w\/\-]*)$/);
-                const matchTag = beforeCursor.match(/<([a-zA-Z0-9_\-\s]*)$/);
                 const matchLora = beforeCursor.match(/<lora:([^>]*)$/);
 
-                const ext = app.extensions.find(e => e.name === "UmiAI.WildcardSystem");
-                if (!ext || !ext.data) return;
+                if (!ext || !ext.wildcards) return;
 
                 let options = [];
                 let triggerType = ""; 
                 let matchIndex = 0;
                 let query = "";
 
+                // -- Wildcard Logic --
                 if (matchFile) {
                     triggerType = "file";
                     query = matchFile[1].toLowerCase();
                     matchIndex = matchFile.index;
-                    options = ext.data.files.filter(w => w.toLowerCase().includes(query));
-                } else if (matchTag) {
-                    triggerType = "tag";
-                    query = matchTag[1].toLowerCase();
-                    matchIndex = matchTag.index;
-                    options = ext.data.tags.filter(t => t.toLowerCase().includes(query));
-                } else if (matchLora) {
+                    // Filter the flat list from Python
+                    options = ext.wildcards.filter(w => w.toLowerCase().includes(query));
+                } 
+                // -- LoRA Logic (Basic Fallback) --
+                else if (matchLora) {
                     triggerType = "lora";
                     query = matchLora[1].toLowerCase();
                     matchIndex = matchLora.index;
-                    if(ext.data.loras) {
-                        options = ext.data.loras.filter(l => l.toLowerCase().includes(query));
-                    }
+                    // Note: Your node currently only sends wildcards. 
+                    // Add LoRA list in Python if you want this to work fully.
+                    options = []; 
                 }
 
                 if (triggerType && options.length > 0) {
-                    const rect = textWidget.inputEl.getBoundingClientRect();
-                    const topOffset = rect.top + 20 + (rect.height / 2); 
+                    const rect = inputEl.getBoundingClientRect();
+                    const topOffset = rect.top + 20 + (rect.height / 2); // Approximate pos
                     
                     ext.popup.show(rect.left + 20, topOffset, options, (selected) => {
                         let completion = "";
                         if (triggerType === "file") completion = `__${selected}__`;
-                        else if (triggerType === "tag") completion = `<[${selected}]>`; 
                         else if (triggerType === "lora") completion = `<lora:${selected}:1.0>`;
 
                         const prefix = text.substring(0, matchIndex);
                         const suffix = text.substring(cursor);
-                        textWidget.inputEl.value = prefix + completion + suffix;
-                        if(textWidget.callback) textWidget.callback(textWidget.inputEl.value);
                         
+                        inputEl.value = prefix + completion + suffix;
+                        
+                        // Notify ComfyUI of change
+                        if(textWidget.callback) textWidget.callback(inputEl.value);
+                        
+                        // Move cursor to end of inserted tag
                         const newCursorPos = (prefix + completion).length;
-                        textWidget.inputEl.setSelectionRange(newCursorPos, newCursorPos);
-                        textWidget.inputEl.focus();
+                        inputEl.setSelectionRange(newCursorPos, newCursorPos);
+                        inputEl.focus();
                     });
                 } else {
                     ext.popup.hide();
                 }
             });
 
+            // Close on outside click
             document.addEventListener("mousedown", (e) => {
-                const ext = app.extensions.find(e => e.name === "UmiAI.WildcardSystem");
-                if (ext && ext.popup && e.target !== ext.popup.element && !ext.popup.element.contains(e.target) && e.target !== textWidget.inputEl) {
+                if (ext && ext.popup && e.target !== ext.popup.element && !ext.popup.element.contains(e.target) && e.target !== inputEl) {
                     ext.popup.hide();
                 }
             });
