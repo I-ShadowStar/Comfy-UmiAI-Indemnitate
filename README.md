@@ -41,6 +41,10 @@ UmiAI transforms static prompts into dynamic, context-aware workflows. It introd
 
 ---
 
+### Updating
+
+**Node giving you a strange issue after updating? Right click the node and press "Fix Node (recreate)" and it'll repopulate with correct default values**
+
 ## 🔌 Wiring Guide (The "Passthrough" Method)
 
 The UmiAI node acts as the "Central Brain". You must pass your **Model** and **CLIP** through it so it can apply LoRAs automatically.
