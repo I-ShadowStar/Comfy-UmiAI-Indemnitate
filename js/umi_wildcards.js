@@ -230,7 +230,7 @@ const HELP_HTML = `
                 <h4 style="margin-top:0">Step 2: Prompts & Hot-Swapping</h4>
                 <ul class="step-list">
                     <li>Connect <strong>Text/Negative</strong> outputs to your CLIP Text Encodes.</li>
-                    <li><strong>Hot-Swap Files:</strong> Added a new wildcard? Set <code>autorefresh</code> to <strong>"Yes"</strong>, queue once, then set back to "No". No restart needed!</li>
+                    <li><strong>Hot-Swap Files:</strong> Added a new wildcard? Click the <strong>"Refresh Wildcards"</strong> button. No restart needed!</li>
                 </ul>
             </div>
         </div>
@@ -311,7 +311,7 @@ A photo of a cat, $style</div>
     
     <div class="umi-section">
         <h3>📂 Creating & Using Wildcards</h3>
-        <p>You can create your own lists in the <code>wildcards/</code> folder. The system now supports <strong>Hot-Swapping</strong> (using autorefresh) and <strong>Recursive Scanning</strong> (files in subfolders work!).</p>
+        <p>You can create your own lists in the <code>wildcards/</code> folder. The system now supports <strong>Hot-Swapping</strong> and <strong>Recursive Scanning</strong> (files in subfolders work!).</p>
         
         <div class="umi-grid-2">
             <div>
@@ -404,7 +404,7 @@ $class={Knight|Cyberpunk}
         <table class="umi-table">
             <tr><th>Setting</th><th>Description</th></tr>
             <tr><td><strong>Threshold</strong></td><td>Strictness. High (0.8) = Core features only. Low (0.3) = Outfits/Details.</td></tr>
-            <tr><td><strong>AutoRefresh</strong></td><td>Set to "Yes" to force a re-fetch from the API (bypassing cache).</td></tr>
+            <tr><td><strong>Max Tags</strong></td><td>Limit how many descriptive tags are returned.</td></tr>
         </table>
     </div>
 
@@ -507,19 +507,25 @@ function showHelpModal() {
 app.registerExtension({
     name: "UmiAI.WildcardSystem",
     async setup() {
-        // Fetch from the correct endpoint (matches your new Python)
-        try {
-            const resp = await fetch("/umiapp/wildcards");
-            if (resp.ok) {
-                // Returns flat array: ["clothes/pants", "style/anime", ...]
-                this.wildcards = await resp.json(); 
-            } else {
+        // Define a function we can call later to refresh the lists
+        this.fetchWildcards = async () => {
+             try {
+                // Fetch from the correct endpoint (matches your new Python)
+                const resp = await fetch("/umiapp/wildcards");
+                if (resp.ok) {
+                    // Returns sorted array
+                    this.wildcards = await resp.json(); 
+                } else {
+                    this.wildcards = [];
+                }
+            } catch (e) {
+                console.error("[UmiAI] Failed to load wildcards:", e);
                 this.wildcards = [];
             }
-        } catch (e) {
-            console.error("[UmiAI] Failed to load wildcards:", e);
-            this.wildcards = [];
-        }
+        };
+
+        // Initial fetch
+        await this.fetchWildcards();
         this.popup = new AutoCompletePopup();
     },
 
@@ -540,6 +546,49 @@ app.registerExtension({
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             if (onNodeCreated) onNodeCreated.apply(this, arguments);
+            const self = this;
+
+            // ============================================================
+            // NEW: REFRESH BUTTON WIDGET
+            // ============================================================
+            // Add a button that hits the API to refresh file caches
+            this.addWidget("button", "🔄 Refresh Wildcards", null, () => {
+                const btn = self.widgets.find(w => w.name === "🔄 Refresh Wildcards" || w.name === "✅ Refreshed!" || w.name === "❌ Error" || w.name === "⏳ Refreshing...");
+                
+                // Visual feedback: Loading
+                if(btn) {
+                    btn.name = "⏳ Refreshing...";
+                    app.canvas.setDirty(true);
+                }
+                
+                fetch("/umiapp/refresh", { method: "POST" })
+                    .then(r => r.json())
+                    .then(data => {
+                        // Re-fetch the autocomplete list in JS to match Python
+                        const ext = app.extensions.find(e => e.name === "UmiAI.WildcardSystem");
+                        if(ext && ext.fetchWildcards) ext.fetchWildcards();
+                        
+                        // Visual feedback: Success
+                        if(btn) {
+                            btn.name = "✅ Refreshed!";
+                            app.canvas.setDirty(true);
+                            // Reset back to normal after 1.5s
+                            setTimeout(() => { 
+                                if(btn) {
+                                    btn.name = "🔄 Refresh Wildcards"; 
+                                    app.canvas.setDirty(true);
+                                }
+                            }, 1500);
+                        }
+                    })
+                    .catch(e => {
+                        console.error("[UmiAI] Refresh failed", e);
+                        if(btn) {
+                            btn.name = "❌ Error";
+                            app.canvas.setDirty(true);
+                        }
+                    });
+            });
 
             // ============================================================
             // DYNAMIC WIDGET VISIBILITY LOGIC
