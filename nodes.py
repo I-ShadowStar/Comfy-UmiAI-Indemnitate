@@ -56,7 +56,8 @@ DOWNLOADABLE_MODELS = {
 ALL_KEY = 'all_files_index'
 
 def parse_tag(tag):
-    if tag is None: return ""
+    if tag is None:
+        return ""
     tag = tag.replace("__", "").replace('<', '').replace('>', '').strip()
     if tag.startswith('#'):
         return tag
@@ -67,21 +68,26 @@ def read_file_lines(file):
     lines = []
     for line in f_lines:
         line = line.strip()
-        if not line: continue
-        if line.startswith('#'): continue
+        if not line:
+            continue
+        if line.startswith('#'):
+            continue
         if '#' in line:
             line = line.split('#')[0].strip()
         lines.append(line)
     return lines
 
 def parse_wildcard_range(range_str, num_variants):
-    if range_str is None: return 1, 1
+    if range_str is None:
+        return 1, 1
+    
     if "-" in range_str:
         parts = range_str.split("-")
         if len(parts) == 2:
             start = int(parts[0]) if parts[0] else 1
             end = int(parts[1]) if parts[1] else num_variants
             return min(start, end), max(start, end)
+    
     try:
         val = int(range_str)
         return val, val
@@ -89,19 +95,23 @@ def parse_wildcard_range(range_str, num_variants):
         return 1, 1
 
 def process_wildcard_range(tag, lines):
-    if not lines: return ""
-    if tag.startswith('#'): return None
+    if not lines:
+        return ""
+    if tag.startswith('#'):
+        return None
     
     if "$$" not in tag:
         selected = random.choice(lines)
-        if '#' in selected: selected = selected.split('#')[0].strip()
+        if '#' in selected:
+            selected = selected.split('#')[0].strip()
         return selected
         
     range_str, tag_name = tag.split("$$", 1)
     try:
         low, high = parse_wildcard_range(range_str, len(lines))
         num_items = random.randint(low, high)
-        if num_items == 0: return ""
+        if num_items == 0:
+            return ""
             
         selected = random.sample(lines, min(num_items, len(lines)))
         selected = [line.split('#')[0].strip() if '#' in line else line for line in selected]
@@ -109,7 +119,8 @@ def process_wildcard_range(tag, lines):
     except Exception as e:
         print(f"Error processing wildcard range: {e}")
         selected = random.choice(lines)
-        if '#' in selected: selected = selected.split('#')[0].strip()
+        if '#' in selected:
+            selected = selected.split('#')[0].strip()
         return selected
 
 # ==============================================================================
@@ -159,7 +170,8 @@ class TagLoader:
         Builds a comprehensive index of all valid wildcard calls.
         For YAMLs, it expands them: 'style.yaml' with key 'hair' becomes 'style/hair'.
         """
-        if self.index_built: return
+        if self.index_built:
+            return
 
         new_index = set()
         
@@ -171,7 +183,8 @@ class TagLoader:
 
         # 2. Add YAML Keys (Namespace them with the filename!)
         for file_key, full_path in self.yaml_lookup.items():
-            if file_key == 'globals': continue
+            if file_key == 'globals':
+                continue
             try:
                 # We load the YAML specifically to index its keys
                 with open(full_path, encoding="utf8") as f:
@@ -229,7 +242,8 @@ class TagLoader:
         return results
 
     def is_umi_format(self, data):
-        if not isinstance(data, dict): return False
+        if not isinstance(data, dict):
+            return False
         umi_keys = {'prompts', 'description', 'tags', 'prefix', 'suffix'}
         for k, v in data.items():
             if isinstance(v, dict):
@@ -296,7 +310,7 @@ class TagLoader:
                     
                     # Logic 1: UMI Format (Keys are basically global to that file)
                     if self.is_umi_format(data):
-                        # Cache the specific keys for metadata access
+                        # Cache the specific keys
                         for title, entry in data.items():
                             if isinstance(entry, dict):
                                 processed = self.process_yaml_entry(title, entry)
@@ -366,7 +380,9 @@ class TagSelector:
         self.scoped_negatives = []
 
     def process_scoped_negative(self, text):
-        if not isinstance(text, str): return text
+        if not isinstance(text, str):
+            return text
+        
         if "--neg:" in text:
             parts = text.split("--neg:", 1)
             positive = parts[0].strip()
@@ -385,7 +401,8 @@ class TagSelector:
                 vars_out.append(f"${k.strip()}={v.strip()}")
             return " ".join(vars_out)
 
-        if not isinstance(tags, list): return ""
+        if not isinstance(tags, list):
+            return ""
         
         seed_match = re.match(r'#([0-9|]+)\$\$(.*)', parsed_tag)
         if seed_match:
@@ -431,21 +448,25 @@ class TagSelector:
             nested_tag = value[2:-2]
             nested_seed = f"{seed_id}_{nested_tag}" if seed_id else None
             
-            if nested_tag in self.processing_stack: return value
+            if nested_tag in self.processing_stack:
+                return value
+            
             self.processing_stack.add(nested_tag)
             
             if nested_seed and nested_seed in self.resolved_seeds:
                 resolved = self.resolved_seeds[nested_seed]
             else:
                 resolved = self.select(nested_tag)
-                if nested_seed: self.resolved_seeds[nested_seed] = resolved
+                if nested_seed:
+                    self.resolved_seeds[nested_seed] = resolved
             
             self.processing_stack.remove(nested_tag)
             return resolved
         return value
 
     def get_tag_group_choice(self, parsed_tag, groups, tags):
-        if not isinstance(tags, dict): return ""
+        if not isinstance(tags, dict):
+            return ""
         
         resolved_groups = []
         for g in groups:
@@ -462,11 +483,15 @@ class TagSelector:
 
         candidates = []
         for title, tag_set in tags.items():
-            if not isinstance(tag_set, (set, list)): continue 
-            if isinstance(tag_set, list): tag_set = set(tag_set)
+            if not isinstance(tag_set, (set, list)):
+                continue 
+            if isinstance(tag_set, list):
+                tag_set = set(tag_set)
             
-            if not pos_groups.issubset(tag_set): continue
-            if not neg_groups.isdisjoint(tag_set): continue
+            if not pos_groups.issubset(tag_set):
+                continue
+            if not neg_groups.isdisjoint(tag_set):
+                continue
             if any_groups:
                 if not all(not group.isdisjoint(tag_set) for group in any_groups):
                     continue
@@ -492,7 +517,8 @@ class TagSelector:
 
     def select(self, tag, groups=None):
         self.previously_selected_tags.setdefault(tag, 0)
-        if self.previously_selected_tags.get(tag) > 500: return f"LOOP_ERROR({tag})"
+        if self.previously_selected_tags.get(tag) > 500:
+            return f"LOOP_ERROR({tag})"
         
         self.previously_selected_tags[tag] += 1
         parsed_tag = parse_tag(tag)
@@ -537,12 +563,15 @@ class TagSelector:
                  for k, v in selected.items():
                      vars_out.append(f"${k.strip()}={v.strip()}")
                  return " ".join(vars_out)
-            if '#' in selected: selected = selected.split('#')[0].strip()
+            if '#' in selected:
+                selected = selected.split('#')[0].strip()
             selected = self.process_scoped_negative(selected)
             return self.resolve_wildcard_recursively(selected, self.global_seed)
 
-        if groups: return self.get_tag_group_choice(parsed_tag, groups, tags)
-        if tags: return self.get_tag_choice(parsed_tag, tags)
+        if groups:
+            return self.get_tag_group_choice(parsed_tag, groups, tags)
+        if tags:
+            return self.get_tag_choice(parsed_tag, tags)
         
         return None 
 
@@ -550,15 +579,21 @@ class TagSelector:
         prefixes, suffixes, neg_p, neg_s = [], [], [], []
         for entry in self.selected_entries.values():
             for p in entry.get('prefixes', []):
-                if not p: continue
+                if not p:
+                    continue
                 p_str = str(p)
-                if '**' in p_str: neg_p.append(p_str.replace('**', '').strip())
-                else: prefixes.append(p_str)
+                if '**' in p_str:
+                    neg_p.append(p_str.replace('**', '').strip())
+                else:
+                    prefixes.append(p_str)
             for s in entry.get('suffixes', []):
-                if not s: continue
+                if not s:
+                    continue
                 s_str = str(s)
-                if '**' in s_str: neg_s.append(s_str.replace('**', '').strip())
-                else: suffixes.append(s_str)
+                if '**' in s_str:
+                    neg_s.append(s_str.replace('**', '').strip())
+                else:
+                    suffixes.append(s_str)
         return {'prefixes': prefixes, 'suffixes': suffixes, 'neg_prefixes': neg_p, 'neg_suffixes': neg_s}
 
 class TagReplacer:
@@ -570,9 +605,11 @@ class TagReplacer:
         self.shuffle_regex = re.compile(r'\[shuffle:(.*?)\]', re.IGNORECASE)
 
     def replace_wildcard(self, matches):
-        if not matches or len(matches.groups()) != 3: return ""
+        if not matches or len(matches.groups()) != 3:
+            return ""
         match = matches.group(2)
-        if not match: return ""
+        if not match:
+            return ""
         
         if ':' in match:
             scope, opts = match.split(':', 1)
@@ -629,7 +666,8 @@ class DynamicPromptReplacer:
         self.seed = seed
 
     def replace_combinations(self, match):
-        if not match: return ""
+        if not match:
+            return ""
         content = match.group(1)
         
         if content.startswith('~'):
@@ -638,7 +676,8 @@ class DynamicPromptReplacer:
                  pass 
             else:
                 variants = [s.strip() for s in content.split("|")]
-                if not variants: return ""
+                if not variants:
+                    return ""
                 return variants[self.seed % len(variants)]
 
         if '%' in content and '$$' not in content:
@@ -660,16 +699,19 @@ class DynamicPromptReplacer:
             variants = [s.strip() for s in variants_str.split("|")]
             low, high = parse_wildcard_range(range_str, len(variants))
             count = random.randint(low, high)
-            if count <= 0: return ""
+            if count <= 0:
+                return ""
             selected = random.sample(variants, min(count, len(variants)))
             return ", ".join(selected)
 
         variants = [s.strip() for s in content.split("|")]
-        if not variants: return ""
+        if not variants:
+            return ""
         return random.choice(variants)
 
     def replace(self, template):
-        if not template: return ""
+        if not template:
+            return ""
         return self.re_combinations.sub(self.replace_combinations, template)
 
 class ConditionalReplacer:
@@ -682,7 +724,8 @@ class ConditionalReplacer:
     def replace(self, prompt):
         while True:
             match = self.regex.search(prompt)
-            if not match: break
+            if not match:
+                break
             
             full_tag = match.group(0)
             trigger_word = match.group(1).strip()
@@ -786,11 +829,14 @@ class DanbooruReplacer:
 
         try:
             response = requests.get(url, params=params, headers=headers, timeout=5)
-            if response.status_code != 200: return []
+            if response.status_code != 200:
+                return []
             posts = response.json()
-            if not posts: return []
+            if not posts:
+                return []
 
-        except Exception: return []
+        except Exception:
+            return []
 
         tag_counts = Counter()
         total_posts = len(posts)
@@ -816,7 +862,8 @@ class DanbooruReplacer:
             raw_name = match.group(1).strip()
             api_name = raw_name.replace(" ", "_")
             tags = self.get_character_tags(api_name, threshold)
-            if not tags: return raw_name 
+            if not tags:
+                return raw_name 
             selected_tags = tags[:max_tags]
             description = ", ".join(selected_tags)
             return f"{raw_name}, {description}"
@@ -887,7 +934,8 @@ class LoRAHandler:
         try:
             with safe_open(lora_path, framework="pt", device="cpu") as f:
                 metadata = f.metadata()
-            if not metadata: return None
+            if not metadata:
+                return None
             if "ss_tag_frequency" in metadata:
                 try:
                     freqs = json.loads(metadata["ss_tag_frequency"])
@@ -897,14 +945,19 @@ class LoRAHandler:
                     filtered_tags = []
                     for t, c in merged.most_common():
                         clean_t = t.strip()
-                        if clean_t in self.blacklist: continue
-                        if " " in clean_t and clean_t.replace(" ", "_") in self.blacklist: continue
+                        if clean_t in self.blacklist:
+                            continue
+                        if " " in clean_t and clean_t.replace(" ", "_") in self.blacklist:
+                            continue
                         filtered_tags.append(clean_t)
-                        if len(filtered_tags) >= max_tags: break
+                        if len(filtered_tags) >= max_tags:
+                            break
                     return filtered_tags
-                except Exception: pass
+                except Exception:
+                    pass
             return None
-        except Exception: return None
+        except Exception:
+            return None
 
     def extract_and_load(self, text, model, clip, behavior):
         matches = self.regex.findall(text)
@@ -926,8 +979,10 @@ class LoRAHandler:
             if lora_path:
                 tags = self.get_lora_tags(lora_path)
                 info_block = f"[LORA: {name}]\n"
-                if tags: info_block += f"Common Tags: {', '.join(tags)}"
-                else: info_block += "Common Tags: (No Metadata Found)"
+                if tags:
+                    info_block += f"Common Tags: {', '.join(tags)}"
+                else:
+                    info_block += "Common Tags: (No Metadata Found)"
                 lora_info_output.append(info_block)
 
                 if behavior == "Append to Prompt" and tags:
@@ -967,7 +1022,8 @@ class NegativePromptGenerator:
         return text
 
     def add_list(self, tags):
-        for t in tags: self.negative_tag.add(t.strip())
+        for t in tags:
+            self.negative_tag.add(t.strip())
 
     def get_negative_string(self):
         return ", ".join([t for t in self.negative_tag if t.strip()])
@@ -1045,30 +1101,37 @@ class UmiAIWildcardNode:
         return text, settings
 
     def ensure_model_exists(self, model_choice):
-        if model_choice == "None": return None
+        if model_choice == "None":
+            return None
         target_folder = os.path.join(folder_paths.models_dir, "llm")
         if not os.path.exists(target_folder):
             os.makedirs(target_folder, exist_ok=True)
 
         if model_choice in DOWNLOADABLE_MODELS:
-            if not HF_HUB_AVAILABLE: return None
+            if not HF_HUB_AVAILABLE:
+                return None
             model_info = DOWNLOADABLE_MODELS[model_choice]
             repo_id = model_info["repo_id"]
             filename = model_info["filename"]
             local_file_path = os.path.join(target_folder, filename)
-            if os.path.exists(local_file_path): return local_file_path
+            if os.path.exists(local_file_path):
+                return local_file_path
             try:
                 return hf_hub_download(repo_id=repo_id, filename=filename, local_dir=target_folder, local_dir_use_symlinks=False)
-            except Exception: return None
+            except Exception:
+                return None
         else:
             path = folder_paths.get_full_path("llm", model_choice)
-            if not path: path = os.path.join(target_folder, model_choice)
+            if not path:
+                path = os.path.join(target_folder, model_choice)
             return path
 
     def run_llm_naturalizer(self, text, model_choice, temperature, max_tokens, custom_prompt):
-        if not LLAMA_CPP_AVAILABLE: return text
+        if not LLAMA_CPP_AVAILABLE:
+            return text
         model_path = self.ensure_model_exists(model_choice)
-        if not model_path: return text
+        if not model_path:
+            return text
 
         try:
             llm = Llama(model_path=model_path, n_ctx=4096, n_gpu_layers=0, verbose=False)
@@ -1086,28 +1149,62 @@ class UmiAIWildcardNode:
                     temperature=temperature, max_tokens=max_tokens
                 )
                 return output['choices'][0]['message']['content'].strip()
-        except Exception: return text
+        except Exception:
+            return text
 
-    def process(self, text, seed, width, height, 
-                model=None, clip=None, 
-                lora_tags_behavior="Append to Prompt", 
-                llm_prompt_enhancer="No", 
-                llm_model="None", 
-                llm_temperature=0.7,      
-                llm_max_tokens=400,       
-                custom_system_prompt="",  
-                danbooru_threshold=0.75, 
-                danbooru_max_tags=15, 
-                input_negative=""):
+    # --- SAFETY HELPER ---
+    def get_val(self, kwargs, key, default, value_type=None):
+        val = kwargs.get(key, default)
+        if value_type and not isinstance(val, value_type):
+            try:
+                if value_type == int: return int(val)
+                if value_type == float: return float(val)
+                if value_type == str: return str(val)
+            except:
+                return default
+        return val
+
+    def process(self, **kwargs):
+        # 1. EXTRACT INPUTS SAFELY (CRASH PROOFING)
+        text = self.get_val(kwargs, "text", "", str)
+        seed = self.get_val(kwargs, "seed", 0, int)
+        
+        # Objects (Model/CLIP) - Handle None explicitly
+        model = kwargs.get("model", None)
+        clip = kwargs.get("clip", None)
+
+        # Settings with defaults
+        width = self.get_val(kwargs, "width", 1024, int)
+        height = self.get_val(kwargs, "height", 1024, int)
+        lora_tags_behavior = self.get_val(kwargs, "lora_tags_behavior", "Append to Prompt", str)
+        input_negative = self.get_val(kwargs, "input_negative", "", str)
+
+        # LLM Settings
+        llm_prompt_enhancer = self.get_val(kwargs, "llm_prompt_enhancer", "No", str)
+        llm_model = self.get_val(kwargs, "llm_model", "None", str)
+        llm_temperature = self.get_val(kwargs, "llm_temperature", 0.7, float)
+        llm_max_tokens = self.get_val(kwargs, "llm_max_tokens", 400, int)
+        custom_system_prompt = self.get_val(kwargs, "custom_system_prompt", "", str)
+
+        # Danbooru Settings
+        danbooru_threshold = self.get_val(kwargs, "danbooru_threshold", 0.75, float)
+        danbooru_max_tags = self.get_val(kwargs, "danbooru_max_tags", 15, int)
+
+        # ============================================================
+        # CORE PROCESSING
+        # ============================================================
         
         # Strip comments
         protected_text = text.replace('__#', '___UMI_HASH_PROTECT___').replace('<#', '<___UMI_HASH_PROTECT___')
         clean_lines = []
         for line in protected_text.splitlines():
-            if '//' in line: line = line.split('//')[0]
-            if '#' in line: line = line.split('#')[0]
+            if '//' in line:
+                line = line.split('//')[0]
+            if '#' in line:
+                line = line.split('#')[0]
             line = line.strip()
-            if line: clean_lines.append(line)
+            if line:
+                clean_lines.append(line)
         text = "\n".join(clean_lines)
         text = text.replace('___UMI_HASH_PROTECT___', '#').replace('<___UMI_HASH_PROTECT___', '<#')
 
@@ -1150,12 +1247,17 @@ class UmiAIWildcardNode:
             
         prompt = conditional_replacer.replace(prompt)
         additions = tag_selector.get_prefixes_and_suffixes()
-        if additions['prefixes']: prompt = ", ".join(additions['prefixes']) + ", " + prompt
-        if additions['suffixes']: prompt = prompt + ", " + ", ".join(additions['suffixes'])
+        if additions['prefixes']:
+            prompt = ", ".join(additions['prefixes']) + ", " + prompt
+        if additions['suffixes']:
+            prompt = prompt + ", " + ", ".join(additions['suffixes'])
 
-        if additions['neg_prefixes']: neg_gen.add_list(additions['neg_prefixes'])
-        if additions['neg_suffixes']: neg_gen.add_list(additions['neg_suffixes'])
-        if tag_selector.scoped_negatives: neg_gen.add_list(tag_selector.scoped_negatives)
+        if additions['neg_prefixes']:
+            neg_gen.add_list(additions['neg_prefixes'])
+        if additions['neg_suffixes']:
+            neg_gen.add_list(additions['neg_suffixes'])
+        if tag_selector.scoped_negatives:
+            neg_gen.add_list(tag_selector.scoped_negatives)
 
         prompt = neg_gen.strip_negative_tags(prompt)
         prompt = re.sub(r',\s*,', ',', prompt)
@@ -1174,7 +1276,8 @@ class UmiAIWildcardNode:
         final_negative = input_negative
         if generated_negatives:
             final_negative = f"{final_negative}, {generated_negatives}" if final_negative else generated_negatives
-        if final_negative: final_negative = re.sub(r',\s*,', ',', final_negative).strip()
+        if final_negative:
+            final_negative = re.sub(r',\s*,', ',', final_negative).strip()
 
         prompt, settings = self.extract_settings(prompt)
         final_width = settings['width'] if settings['width'] > 0 else width
