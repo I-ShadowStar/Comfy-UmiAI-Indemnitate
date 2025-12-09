@@ -128,10 +128,6 @@ def process_wildcard_range(tag, lines):
 def get_all_wildcard_paths():
     """
     Returns a list of all valid wildcard directory paths.
-    Checks:
-    1. Internal UmiAI/wildcards
-    2. ComfyUI/wildcards (Root)
-    3. ComfyUI/models/wildcards
     """
     paths = set()
     
@@ -463,6 +459,62 @@ class TagSelector:
             return positive
         return text
 
+    def evaluate_criteria(self, criteria_str, candidate_tags):
+        """
+        Evaluates a logic string (e.g. "red OR (blue AND NOT green)") 
+        against a set/list of candidate tags.
+        """
+        # 1. Pre-process Legacy Syntax
+        clean_criteria = criteria_str.replace(',', ' AND ')
+        clean_criteria = re.sub(r'(^|\s)--', r' NOT ', clean_criteria)
+        
+        # 2. Tokenize logic
+        ops = {'AND': 'and', 'OR': 'or', 'NOT': 'not', 'XOR': '!='}
+        tokens = re.split(r'(\(|\)|\bAND\b|\bOR\b|\bNOT\b|\bXOR\b)', clean_criteria, flags=re.IGNORECASE)
+        
+        expression = []
+        candidate_context = " ".join(candidate_tags).lower()
+
+        for token in tokens:
+            token = token.strip()
+            if not token: continue
+            
+            upper_token = token.upper()
+            if upper_token in ops:
+                expression.append(ops[upper_token])
+            elif token in ('(', ')'):
+                expression.append(token)
+            else:
+                # FIX: Explicit Variable Equality Check (e.g. $type=fire)
+                if '=' in token:
+                    left, right = token.split('=', 1)
+                    left = left.strip()
+                    right = right.strip()
+                    
+                    if left.startswith('$') and left[1:] in self.variables:
+                        left_val = str(self.variables[left[1:]]).lower()
+                        expression.append(str(left_val == right.lower()))
+                    else:
+                         expression.append(str(left.lower() == right.lower()))
+                         
+                # Standard Variable Resolution (e.g. $type)
+                elif token.startswith('$') and token[1:] in self.variables:
+                    token_val = str(self.variables[token[1:]])
+                    exists = token_val.lower() in candidate_context
+                    expression.append(str(exists))
+                
+                # Standard Text Search
+                else:
+                    clean_token = token.replace('[','').replace(']','').strip()
+                    exists = clean_token.lower() in candidate_context
+                    expression.append(str(exists))
+
+        full_expression = " ".join(expression)
+        try:
+            return eval(full_expression, {"__builtins__": None}, {})
+        except Exception:
+            return criteria_str.lower() in candidate_context
+
     def get_tag_choice(self, parsed_tag, tags):
         if isinstance(tags, list) and len(tags) > 0 and isinstance(tags[0], dict):
             row = random.choice(tags)
@@ -530,43 +582,20 @@ class TagSelector:
             return resolved
         return value
 
-    def get_tag_group_choice(self, parsed_tag, groups, tags):
+    def get_tag_group_choice(self, parsed_tag, criteria_str, tags):
         if not isinstance(tags, dict):
             return ""
         
-        resolved_groups = []
-        for g in groups:
-            clean_g = g.strip()
-            # Fix: Resolve variables inside tags (e.g. <[$char]> -> <[rin]>)
-            if clean_g.startswith('$') and clean_g[1:] in self.variables:
-                val = self.variables[clean_g[1:]]
-                resolved_groups.append(val)
-            else:
-                resolved_groups.append(clean_g)
-
-        neg_groups = {x.replace('--', '').strip().lower() for x in resolved_groups if x.startswith('--')}
-        pos_groups = {x.strip().lower() for x in resolved_groups if not x.startswith('--') and '|' not in x}
-        any_groups = [{y.strip() for y in x.lower().split('|')} for x in resolved_groups if '|' in x]
-
         candidates = []
-        
-        # Fix: Better Dictionary Handling for Umi Cards
         for title, entry_data in tags.items():
+            candidate_tags = []
             if isinstance(entry_data, dict):
-                tag_set = set(entry_data.get('tags', []))
+                candidate_tags = entry_data.get('tags', [])
             elif isinstance(entry_data, (list, set)):
-                tag_set = set(entry_data)
-            else:
-                continue
+                candidate_tags = list(entry_data)
             
-            if not pos_groups.issubset(tag_set):
-                continue
-            if not neg_groups.isdisjoint(tag_set):
-                continue
-            if any_groups:
-                if not all(not group.isdisjoint(tag_set) for group in any_groups):
-                    continue
-            candidates.append(title)
+            if self.evaluate_criteria(criteria_str, candidate_tags):
+                candidates.append(title)
 
         if candidates:
             seed_match = re.match(r'#([0-9|]+)\$\$(.*)', parsed_tag)
@@ -669,7 +698,6 @@ class TagReplacer:
     def __init__(self, tag_selector):
         self.tag_selector = tag_selector
         self.wildcard_regex = re.compile(r'(__|<)(.*?)(__|>)')
-        self.opts_regexp = re.compile(r'(?<=\[)(.*?)(?=\])')
         self.clean_regex = re.compile(r'\[clean:(.*?)\]', re.IGNORECASE)
         self.shuffle_regex = re.compile(r'\[shuffle:(.*?)\]', re.IGNORECASE)
 
@@ -682,15 +710,14 @@ class TagReplacer:
         
         if ':' in match:
             scope, opts = match.split(':', 1)
-            global_opts = self.opts_regexp.findall(opts)
-            if global_opts:
-                 selected = self.tag_selector.select(scope, global_opts)
+            if opts.strip():
+                 selected = self.tag_selector.select(scope, opts)
             else:
                  selected = self.tag_selector.select(scope)
         else:
-            global_opts = self.opts_regexp.findall(match)
-            if global_opts:
-                selected = self.tag_selector.select(ALL_KEY, global_opts)
+            opts_regexp = re.findall(r'(?<=\[)(.*?)(?=\])', match)
+            if opts_regexp:
+                selected = self.tag_selector.select(ALL_KEY, ",".join(opts_regexp))
             else:
                 selected = self.tag_selector.select(match)
         
@@ -790,18 +817,67 @@ class ConditionalReplacer:
             re.IGNORECASE | re.DOTALL
         )
 
-    def replace(self, prompt):
+    def evaluate_logic(self, condition, context, variables=None):
+        if variables is None: variables = {}
+        
+        ops = {'AND': 'and', 'OR': 'or', 'NOT': 'not', 'XOR': '!='}
+        tokens = re.split(r'(\(|\)|\bAND\b|\bOR\b|\bNOT\b|\bXOR\b)', condition, flags=re.IGNORECASE)
+        expression = []
+        
+        for token in tokens:
+            token = token.strip()
+            if not token: continue
+            upper_token = token.upper()
+            if upper_token in ops:
+                expression.append(ops[upper_token])
+            elif token in ('(', ')'):
+                expression.append(token)
+            else:
+                # FIX: Handle Equality explicitly ($char=robot)
+                if '=' in token:
+                    left, right = token.split('=', 1)
+                    left = left.strip()
+                    right = right.strip()
+                    
+                    if left.startswith('$'):
+                        var_name = left[1:]
+                        left_val = str(variables.get(var_name, "")).lower()
+                    else:
+                        left_val = left.lower()
+                    
+                    expression.append(str(left_val == right.lower()))
+                
+                # FIX: Handle Boolean Variable Check ($is_robot)
+                elif token.startswith('$'):
+                    var_name = token[1:]
+                    val = variables.get(var_name, False)
+                    # Truthy check (string "false" or "0" becomes False)
+                    is_true = bool(val) and str(val).lower() not in ['false', '0', 'no']
+                    expression.append(str(is_true))
+                    
+                else:
+                    exists = token.lower() in context.lower()
+                    expression.append(str(exists))
+        
+        try:
+            return eval(" ".join(expression), {"__builtins__": None}, {})
+        except:
+            return False
+
+    def replace(self, prompt, variables):
         while True:
             match = self.regex.search(prompt)
-            if not match:
-                break
+            if not match: break
             
             full_tag = match.group(0)
-            trigger_word = match.group(1).strip()
+            condition = match.group(1).strip()
             true_text = match.group(2)
             false_text = match.group(3) if match.group(3) else ""
+            
+            context = prompt.replace(full_tag, "")
 
-            if trigger_word.lower() in prompt.replace(full_tag, "").lower():
+            # FIX: Pass variables into logic engine
+            if self.evaluate_logic(condition, context, variables):
                 replacement = true_text
             else:
                 replacement = false_text
@@ -811,7 +887,8 @@ class ConditionalReplacer:
 
 class VariableReplacer:
     def __init__(self):
-        self.assign_regex = re.compile(r'\$([a-zA-Z0-9_]+)\s*=\s*((?:\{.*?\})|(?:[^\s]+))', re.DOTALL)
+        # FIX: Updated Regex to be Multiline Anchored and more robust for values
+        self.assign_regex = re.compile(r'^\$([a-zA-Z0-9_]+)\s*=\s*(.*?)$', re.MULTILINE)
         self.use_regex = re.compile(r'\$([a-zA-Z0-9_]+)((?:\.[a-zA-Z_]+)*)')
         self.variables = {}
 
@@ -821,7 +898,7 @@ class VariableReplacer:
     def store_variables(self, text, tag_replacer, dynamic_replacer):
         def _replace_assign(match):
             var_name = match.group(1)
-            raw_value = match.group(2)
+            raw_value = match.group(2).strip() # Strip whitespace from captured value
             
             resolved_value = raw_value
             for _ in range(10): 
@@ -1320,7 +1397,9 @@ class UmiAIWildcardNode:
             prompt = danbooru_replacer.replace(prompt, danbooru_threshold, danbooru_max_tags)
             iterations += 1
             
-        prompt = conditional_replacer.replace(prompt)
+        # FIX: PASS VARIABLES TO CONDITIONAL REPLACER
+        prompt = conditional_replacer.replace(prompt, variable_replacer.variables)
+        
         additions = tag_selector.get_prefixes_and_suffixes()
         if additions['prefixes']:
             prompt = ", ".join(additions['prefixes']) + ", " + prompt
