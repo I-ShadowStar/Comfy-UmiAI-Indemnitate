@@ -1253,7 +1253,7 @@ LoRAs: ${(derived.loras || []).length ? this.escapeHtml((derived.loras || []).jo
 }
 
 const imageBrowser = new ImageBrowser();
-
+window.umiImageBrowser = imageBrowser;
 app.registerExtension({
     name: 'Umi.ImageBrowser',
 

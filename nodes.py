@@ -10,6 +10,7 @@ import fnmatch
 import gc 
 import sys
 import subprocess
+import time
 from datetime import datetime
 from collections import Counter, OrderedDict
 import folder_paths
@@ -1434,14 +1435,36 @@ class LoRAHandler:
         except Exception:
             return None
 
-    def _get_override_tags(self, base_name):
-        overrides_path = os.path.join(self._cache_dir, "lora_overrides.json")
-        overrides = self._load_json_file(overrides_path) or {}
-        override = overrides.get(base_name, {})
-        tags = override.get("tags") if isinstance(override, dict) else None
-        if isinstance(tags, list):
-            return [str(t).strip() for t in tags if str(t).strip()]
-        return []
+    def _get_override_tags(self, lora_path):
+            """
+            Phase 8: Updated to check for local sidecar files instead of a global overrides file.
+            Returns activation tags from .json or .civitai.info.
+            """
+            if not lora_path:
+                return None
+
+            lora_base_path = os.path.splitext(lora_path)[0]
+            
+            # Priority 1: Check for .json (Standard A1111/Civitai format)
+            json_path = lora_base_path + ".json"
+            if os.path.exists(json_path):
+                data = self._load_json_file(json_path)
+                if data:
+                    # Check various common keys for activation tags
+                    tags = data.get("activation text") or data.get("trainedWords") or data.get("tags")
+                    if tags:
+                        return tags if isinstance(tags, str) else ", ".join(tags)
+
+            # Priority 2: Check for .civitai.info (SD-CivitAI Helper format)
+            info_path = lora_base_path + ".civitai.info"
+            if os.path.exists(info_path):
+                data = self._load_json_file(info_path)
+                if data:
+                    tags = data.get("activation text")
+                    if tags:
+                        return tags if isinstance(tags, str) else ", ".join(tags)
+            
+            return None
 
     def _get_civitai_info_tags(self, lora_path):
         civitai_info_path = os.path.splitext(lora_path)[0] + ".civitai.info"
@@ -1451,39 +1474,44 @@ class LoRAHandler:
             return []
         return [t.strip() for t in activation_text.split(",") if t.strip()]
 
-    def _get_civitai_cache_tags(self, base_name):
-        cache_path = os.path.join(self._cache_dir, "civitai_cache.json")
-        cache = self._load_json_file(cache_path) or {}
-        civitai_data = cache.get(base_name, {})
-        tags = civitai_data.get("trigger_words")
-        if isinstance(tags, list):
-            return [str(t).strip() for t in tags if str(t).strip()]
-        return []
+    def _get_civitai_cache_tags(self, lora_path):
+            """
+            Deprecated global cache lookup. 
+            Now redirects to sidecar file logic for consistency.
+            """
+            return self._get_override_tags(lora_path)
 
-    def get_activation_tags(self, lora_name, lora_path, max_tags=10):
-        base_name = os.path.splitext(os.path.basename(lora_name))[0]
-        if lora_path:
-            base_name = os.path.splitext(os.path.basename(lora_path))[0]
+    def get_activation_tags(self, lora_name, lora_path, max_tags=5):
+            """Get tags for a LoRA, prioritizing local sidecar files over internal metadata."""
+            # 1. Check for local sidecar files (.json or .civitai.info)
+            override_tags = self._get_override_tags(lora_path)
+            if override_tags:
+                tags = [t.strip() for t in override_tags.split(',') if t.strip()]
+                return tags[:max_tags], "local_info"
 
-        override_tags = self._get_override_tags(base_name)
-        if override_tags:
-            return override_tags[:max_tags], "override"
+            # 2. Fallback to reading internal Safetensors metadata
+            if lora_path and lora_path.endswith(".safetensors"):
+                try:
+                    with safe_open(lora_path, framework="pt", device="cpu") as f:
+                        metadata = f.metadata()
+                        if metadata:
+                            tags_str = metadata.get("ss_tag_frequency", "{}")
+                            try:
+                                tag_freq = json.loads(tags_str)
+                                if isinstance(tag_freq, dict):
+                                    all_tags = {}
+                                    for sub_dict in tag_freq.values():
+                                        if isinstance(sub_dict, dict):
+                                            all_tags.update(sub_dict)
+                                    sorted_tags = sorted(all_tags.items(), key=lambda x: x[1], reverse=True)
+                                    filtered_tags = [t for t, f in sorted_tags if t.lower() not in self.blacklist]
+                                    return filtered_tags[:max_tags], "safetensors"
+                            except:
+                                pass
+                except Exception as e:
+                    print(f"[UmiAI] Error reading metadata for {lora_name}: {e}")
 
-        if lora_path:
-            civitai_info_tags = self._get_civitai_info_tags(lora_path)
-            if civitai_info_tags:
-                return civitai_info_tags[:max_tags], "civitai_info"
-
-        civitai_cache_tags = self._get_civitai_cache_tags(base_name)
-        if civitai_cache_tags:
-            return civitai_cache_tags[:max_tags], "civitai_cache"
-
-        if lora_path:
-            safetensor_tags = self.get_lora_tags(lora_path, max_tags=max_tags) or []
-            if safetensor_tags:
-                return safetensor_tags, "safetensors"
-
-        return [], "none"
+            return [], "none"
 
     def patch_zimage_lora(self, lora):
         new_lora = {}
@@ -3328,145 +3356,9 @@ async def get_wildcards(request):
         "use_folder_paths": use_folder_paths,  # Include setting so frontend knows
     })
 
-@server.PromptServer.instance.routes.get("/umiapp/loras")
-async def get_loras_metadata(request):
-    """Phase 6: Get all LoRAs with metadata for browser panel"""
-    loras = folder_paths.get_filename_list("loras")
-    if not loras:
-        return web.json_response({"loras": []})
+# Note: /umiapp/loras is handled in __init__.py to provide normalized civitai fields.
 
-    lora_handler = LoRAHandler()
-    lora_data = []
-
-    # Load CivitAI cache if exists
-    civitai_cache = {}
-    cache_path = os.path.join(os.path.dirname(__file__), "civitai_cache.json")
-    if os.path.exists(cache_path):
-        try:
-            with open(cache_path, 'r', encoding='utf-8') as f:
-                civitai_cache = json.load(f)
-        except Exception as e:
-            print(f"[Umi LoRA Browser] Error loading CivitAI cache: {e}")
-
-    # Load manual overrides if exists
-    overrides = {}
-    overrides_path = os.path.join(os.path.dirname(__file__), "lora_overrides.json")
-    if os.path.exists(overrides_path):
-        try:
-            with open(overrides_path, 'r', encoding='utf-8') as f:
-                overrides = json.load(f)
-        except Exception as e:
-            print(f"[Umi LoRA Browser] Error loading overrides: {e}")
-
-    for lora_name in sorted(loras):
-        lora_path = folder_paths.get_full_path("loras", lora_name)
-        if not lora_path:
-            continue
-
-        # Get base name without extension
-        base_name = os.path.splitext(lora_name)[0]
-        lora_dir = os.path.dirname(lora_path)
-        lora_base_path = os.path.splitext(lora_path)[0]
-
-        # Check for local metadata files (JSON, civitai.info, preview images)
-        local_metadata = {}
-        local_preview = None
-        civitai_info_tags = []
-        
-        # Check for .json file next to the LoRA
-        json_path = lora_base_path + ".json"
-        if os.path.exists(json_path):
-            try:
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    local_metadata = json.load(f)
-            except Exception as e:
-                print(f"[Umi LoRA Browser] Error loading local JSON for {base_name}: {e}")
-        
-        # Check for .civitai.info file (SD-CivitAI Helper format)
-        # Format: "LoRAName.civitai.info" - contains "activation text" field
-        civitai_info_path = lora_base_path + ".civitai.info"
-        if os.path.exists(civitai_info_path):
-            try:
-                with open(civitai_info_path, 'r', encoding='utf-8') as f:
-                    civitai_info = json.load(f)
-                    # Extract activation text if present
-                    activation_text = civitai_info.get("activation text", "")
-                    if activation_text:
-                        civitai_info_tags = [t.strip() for t in activation_text.split(",") if t.strip()]
-                    # Store full civitai info in local_metadata if not already set
-                    if not local_metadata:
-                        local_metadata = civitai_info
-            except Exception as e:
-                print(f"[Umi LoRA Browser] Error loading .civitai.info for {base_name}: {e}")
-        
-        # Check for preview images (common formats)
-        for ext in ['.preview.png', '.preview.jpg', '.preview.jpeg', '.preview.webp', 
-                    '.png', '.jpg', '.jpeg', '.webp']:
-            preview_path = lora_base_path + ext
-            if os.path.exists(preview_path):
-                local_preview = preview_path
-                break
-
-        # Get activation tags from SafeTensors metadata
-        tags = lora_handler.get_lora_tags(lora_path, max_tags=10)
-        
-        # Priority for tags: civitai_info_tags > safetensors tags
-        # civitai_info_tags come from .civitai.info "activation text" field
-        final_tags = civitai_info_tags if civitai_info_tags else (tags if tags else [])
-
-        # Build lora info with local data priority, then overrides, then CivitAI
-        lora_info = {
-            "name": base_name,
-            "filename": lora_name,
-            "tags": final_tags,
-            "civitai_info_tags": civitai_info_tags,  # Tags from .civitai.info file
-            "safetensor_tags": tags if tags else [],  # Tags from safetensor metadata
-            "path": lora_path,
-            "civitai": civitai_cache.get(base_name, {}),
-            "override": overrides.get(base_name, {}),
-            "local": local_metadata,  # Local JSON or .civitai.info data
-            "local_preview": local_preview,  # Local preview image path
-            "has_local_data": bool(local_metadata or local_preview or civitai_info_tags)
-        }
-
-        lora_data.append(lora_info)
-
-    return web.json_response({"loras": lora_data})
-
-@server.PromptServer.instance.routes.get("/umiapp/preview")
-async def serve_lora_preview(request):
-    """Serve local LoRA preview images"""
-    import mimetypes
-    
-    path = request.query.get("path", "")
-    if not path:
-        return web.Response(status=400, text="Missing path parameter")
-    
-    # Security: Only allow serving images from loras folder
-    lora_paths = folder_paths.get_folder_paths("loras")
-    path_allowed = False
-    for lora_base in lora_paths:
-        if os.path.commonpath([os.path.abspath(path), os.path.abspath(lora_base)]) == os.path.abspath(lora_base):
-            path_allowed = True
-            break
-    
-    if not path_allowed:
-        return web.Response(status=403, text="Access denied")
-    
-    if not os.path.exists(path):
-        return web.Response(status=404, text="File not found")
-    
-    # Determine content type
-    mime_type, _ = mimetypes.guess_type(path)
-    if not mime_type or not mime_type.startswith("image/"):
-        return web.Response(status=400, text="Not an image file")
-    
-    try:
-        with open(path, 'rb') as f:
-            content = f.read()
-        return web.Response(body=content, content_type=mime_type)
-    except Exception as e:
-        return web.Response(status=500, text=str(e))
+# Note: /umiapp/preview is handled in __init__.py to support relative preview paths.
 
 @server.PromptServer.instance.routes.post("/umiapp/refresh")
 async def refresh_wildcards(request):
@@ -3494,181 +3386,13 @@ async def refresh_wildcards(request):
         "loras": loras
     })
 
-@server.PromptServer.instance.routes.post("/umiapp/loras/civitai/batch")
-async def fetch_civitai_batch(request):
-    """Phase 6: Batch fetch CivitAI metadata for all LoRAs with rate limiting"""
-    import aiohttp
-    import asyncio
-
-    loras = folder_paths.get_filename_list("loras")
-    if not loras:
-        return web.json_response({"error": "No LoRAs found"}, status=404)
-
-    # Load existing cache
-    cache_path = os.path.join(os.path.dirname(__file__), "civitai_cache.json")
-    cache = {}
-    if os.path.exists(cache_path):
-        try:
-            with open(cache_path, 'r', encoding='utf-8') as f:
-                cache = json.load(f)
-        except:
-            pass
-
-    results = {
-        "total": len(loras),
-        "cached": 0,
-        "fetched": 0,
-        "failed": 0,
-        "skipped": 0
-    }
-
-    async def fetch_one(session, lora_name):
-        base_name = os.path.splitext(lora_name)[0]
-
-        # Skip if already cached
-        if base_name in cache:
-            results["cached"] += 1
-            return
-
-        try:
-            # Rate limiting - wait 1.5 seconds between requests
-            await asyncio.sleep(1.5)
-
-            # Get file path and hash
-            lora_path = folder_paths.get_full_path("loras", lora_name)
-            if not lora_path:
-                results["skipped"] += 1
-                return
-
-            lora_handler = LoRAHandler()
-            file_hash = lora_handler.get_lora_hash(lora_path)
-
-            # Try hash-based lookup first (exact match!)
-            model = None
-            if file_hash:
-                hash_url = f"https://civitai.com/api/v1/model-versions/by-hash/{file_hash}"
-                try:
-                    async with session.get(hash_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        if resp.status == 200:
-                            version_data = await resp.json()
-                            # Fetch the full model data
-                            model_id = version_data.get("modelId")
-                            if model_id:
-                                model_url = f"https://civitai.com/api/v1/models/{model_id}"
-                                async with session.get(model_url, timeout=aiohttp.ClientTimeout(total=10)) as model_resp:
-                                    if model_resp.status == 200:
-                                        model = await model_resp.json()
-                                        print(f"[Umi LoRA Browser] Hash match found for '{base_name}'")
-                except Exception as e:
-                    print(f"[Umi LoRA Browser] Hash lookup failed for '{base_name}': {e}")
-
-            # Fallback to name search if hash lookup failed
-            if not model:
-                from urllib.parse import quote
-                search_url = f"https://civitai.com/api/v1/models?query={quote(base_name)}&types=LORA&limit=5"
-
-                async with session.get(search_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status != 200:
-                        results["skipped"] += 1
-                        print(f"[Umi LoRA Browser] Skipped '{base_name}': No CivitAI data found")
-                        return
-
-                    search_data = await resp.json()
-
-                    if not search_data.get("items"):
-                        results["skipped"] += 1
-                        print(f"[Umi LoRA Browser] Skipped '{base_name}': No search results")
-                        return
-
-                    # Try to find best match based on name similarity
-                    items = search_data["items"]
-
-                    # First try exact match (case insensitive)
-                    for item in items:
-                        if item.get("name", "").lower() == base_name.lower():
-                            model = item
-                            print(f"[Umi LoRA Browser] Exact name match for '{base_name}'")
-                            break
-
-                    # If no exact match, use first result but validate similarity
-                    if not model:
-                        candidate = items[0]
-                        model_name = candidate.get("name", "").lower()
-                        base_words = set(base_name.lower().replace('_', ' ').replace('-', ' ').split())
-                        model_words = set(model_name.replace('_', ' ').replace('-', ' ').split())
-
-                        # Calculate word overlap - skip if less than 30% match
-                        if base_words and model_words:
-                            overlap = len(base_words & model_words) / len(base_words)
-                            if overlap < 0.3:  # Less than 30% word match
-                                results["skipped"] += 1
-                                print(f"[Umi LoRA Browser] Skipped '{base_name}': Poor match (closest: '{candidate.get('name')}', overlap: {overlap:.0%})")
-                                return
-                            else:
-                                model = candidate
-                                print(f"[Umi LoRA Browser] Fuzzy match for '{base_name}' -> '{candidate.get('name')}' (overlap: {overlap:.0%})")
-                        else:
-                            results["skipped"] += 1
-                            return
-
-            # If we still don't have a model, skip
-            if not model:
-                results["skipped"] += 1
-                return
-
-            # Extract CivitAI data from the model
-            civitai_data = {
-                "id": model.get("id"),
-                "name": model.get("name"),
-                "description": model.get("description", "")[:300],  # Truncate
-                "tags": model.get("tags", [])[:15],
-                "creator": model.get("creator", {}).get("username", "Unknown"),
-                "url": f"https://civitai.com/models/{model.get('id')}",
-            }
-
-            if model.get("modelVersions"):
-                latest_version = model["modelVersions"][0]
-                civitai_data["trigger_words"] = latest_version.get("trainedWords", [])[:15]
-                civitai_data["base_model"] = latest_version.get("baseModel", "Unknown")
-
-                if latest_version.get("images"):
-                    first_image = latest_version["images"][0]
-                    civitai_data["preview_url"] = first_image.get("url")
-                    civitai_data["nsfw"] = first_image.get("nsfw", "None")
-
-            cache[base_name] = civitai_data
-            results["fetched"] += 1
-            print(f"[Umi LoRA Browser] Fetched: {base_name}")
-
-        except asyncio.TimeoutError:
-            results["failed"] += 1
-            print(f"[Umi LoRA Browser] Timeout: {base_name}")
-        except Exception as e:
-            results["failed"] += 1
-            print(f"[Umi LoRA Browser] Error fetching {base_name}: {e}")
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            # Process in batches to avoid overwhelming CivitAI
-            batch_size = 5
-            for i in range(0, len(loras), batch_size):
-                batch = loras[i:i+batch_size]
-                tasks = [fetch_one(session, lora_name) for lora_name in batch]
-                await asyncio.gather(*tasks)
-
-                # Save cache after each batch
-                with open(cache_path, 'w', encoding='utf-8') as f:
-                    json.dump(cache, f, indent=2, ensure_ascii=False)
-
-        return web.json_response({"success": True, "results": results})
-
-    except Exception as e:
-        print(f"[Umi LoRA Browser] Batch fetch error: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+# Note: /umiapp/loras/civitai/batch endpoint is handled in __init__.py
+# This endpoint was removed to avoid conflicts - __init__.py has the correct implementation
+# with proper mode handling and CivitaiFetcher.process_file() integration
 
 @server.PromptServer.instance.routes.post("/umiapp/loras/civitai/single")
 async def fetch_civitai_single(request):
-    """Fetch CivitAI metadata for a single LoRA"""
+    """Fetch CivitAI metadata for a single LoRA and save to sidecar files"""
     import aiohttp
     
     try:
@@ -3678,35 +3402,63 @@ async def fetch_civitai_single(request):
         if not lora_name:
             return web.json_response({"error": "lora_name required"}, status=400)
         
+        # Get file path
+        lora_path = folder_paths.get_full_path("loras", lora_name)
+        if not lora_path:
+            # Try with .safetensors extension
+            lora_path = folder_paths.get_full_path("loras", f"{lora_name}.safetensors")
+        
+        if not lora_path:
+            return web.json_response({"error": "LoRA file not found"}, status=404)
+        
         base_name = os.path.splitext(lora_name)[0] if "." in lora_name else lora_name
+        lora_base_path = os.path.splitext(lora_path)[0]
+        civitai_info_path = lora_base_path + ".civitai.info"
+        json_path = lora_base_path + ".json"
         
-        # Load existing cache
-        cache_path = os.path.join(os.path.dirname(__file__), "civitai_cache.json")
-        cache = {}
-        if os.path.exists(cache_path):
+        # Check if .civitai.info already exists and has data
+        if os.path.exists(civitai_info_path):
             try:
-                with open(cache_path, 'r', encoding='utf-8') as f:
-                    cache = json.load(f)
-            except:
-                pass
+                with open(civitai_info_path, 'r', encoding='utf-8') as f:
+                    existing_info = json.load(f)
+                    # Check if it has meaningful data
+                    if existing_info.get("id") or existing_info.get("modelId"):
+                        # Return cached data in the format expected by frontend
+                        model_id = existing_info.get("modelId") or existing_info.get("id")
+                        parent_model = existing_info.get("parent_model_data", {})
+                        model_data = parent_model if parent_model else existing_info.get("model", {})
+                        
+                        civitai_data = {
+                            "id": model_id,
+                            "name": model_data.get("name") or existing_info.get("name", ""),
+                            "description": (model_data.get("description") or existing_info.get("description", ""))[:300],
+                            "tags": model_data.get("tags", existing_info.get("tags", []))[:15],
+                            "creator": model_data.get("creator", {}).get("username", existing_info.get("creator", "Unknown")),
+                            "url": existing_info.get("url") or f"https://civitai.com/models/{model_id}",
+                        }
+                        
+                        if existing_info.get("trainedWords"):
+                            civitai_data["trigger_words"] = existing_info.get("trainedWords", [])[:15]
+                        if existing_info.get("baseModel"):
+                            civitai_data["base_model"] = existing_info.get("baseModel", "Unknown")
+                        if existing_info.get("images"):
+                            first_image = existing_info["images"][0] if isinstance(existing_info["images"], list) else existing_info["images"]
+                            civitai_data["preview_url"] = first_image.get("url") if isinstance(first_image, dict) else None
+                            civitai_data["nsfw"] = first_image.get("nsfw", "None") if isinstance(first_image, dict) else "None"
+                        
+                        return web.json_response({"success": True, "cached": True, "data": civitai_data})
+            except Exception as e:
+                print(f"[Umi LoRA Browser] Error reading existing .civitai.info: {e}")
         
-        # Skip if already cached
-        if base_name in cache:
-            return web.json_response({"success": True, "cached": True, "data": cache[base_name]})
-        
+        # Need to fetch from API
         async with aiohttp.ClientSession() as session:
-            # Get file path and hash
-            lora_path = folder_paths.get_full_path("loras", lora_name)
-            if not lora_path:
-                # Try with .safetensors extension
-                lora_path = folder_paths.get_full_path("loras", f"{lora_name}.safetensors")
-            
             file_hash = None
             if lora_path:
                 lora_handler = LoRAHandler()
                 file_hash = lora_handler.get_lora_hash(lora_path)
             
             model = None
+            version_data = None
             
             # Try hash-based lookup first
             if file_hash:
@@ -3739,13 +3491,11 @@ async def fetch_civitai_single(request):
                             if item.get("name", "").lower() == base_name.lower():
                                 model = item
                                 break
-                        
-                        # If no exact match, return not found (user can use Edit to add manually)
             
             if not model:
                 return web.json_response({"success": False, "error": "No exact match found. Use Edit to add manually."})
             
-            # Extract CivitAI data
+            # Extract CivitAI data for response
             civitai_data = {
                 "id": model.get("id"),
                 "name": model.get("name"),
@@ -3765,10 +3515,76 @@ async def fetch_civitai_single(request):
                     civitai_data["preview_url"] = first_image.get("url")
                     civitai_data["nsfw"] = first_image.get("nsfw", "None")
             
-            # Save to cache
-            cache[base_name] = civitai_data
-            with open(cache_path, 'w', encoding='utf-8') as f:
-                json.dump(cache, f, indent=2, ensure_ascii=False)
+            # Save to .civitai.info file (raw CivitAI data)
+            if version_data:
+                # We have version data from hash lookup - use it
+                version_data["parent_model_data"] = model
+                version_data["url"] = f"https://civitai.com/models/{model.get('id')}"
+                with open(civitai_info_path, 'w', encoding='utf-8') as f:
+                    json.dump(version_data, f, indent=4, ensure_ascii=False)
+            else:
+                # We only have model data from name search - construct version data
+                version_info = {}
+                if model.get("modelVersions"):
+                    latest_version = model["modelVersions"][0]
+                    version_info = {
+                        "id": latest_version.get("id"),
+                        "modelId": model.get("id"),
+                        "name": latest_version.get("name", ""),
+                        "baseModel": latest_version.get("baseModel", "Unknown"),
+                        "trainedWords": latest_version.get("trainedWords", []),
+                        "images": latest_version.get("images", []),
+                        "parent_model_data": model,
+                        "url": f"https://civitai.com/models/{model.get('id')}"
+                    }
+                else:
+                    version_info = {
+                        "modelId": model.get("id"),
+                        "parent_model_data": model,
+                        "url": f"https://civitai.com/models/{model.get('id')}"
+                    }
+                with open(civitai_info_path, 'w', encoding='utf-8') as f:
+                    json.dump(version_info, f, indent=4, ensure_ascii=False)
+            
+            # Update .json file with structured metadata
+            existing_json = {}
+            if os.path.exists(json_path):
+                try:
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        existing_json = json.load(f)
+                except:
+                    pass
+            
+            # Prepare data for .json file
+            parent = model
+            full_desc = parent.get("description", "")
+            trigger_words = ", ".join(civitai_data.get("trigger_words", []))
+            tags = parent.get("tags", [])
+            creator = parent.get("creator", {}).get("username", "Unknown")
+            model_url = f"https://civitai.com/models/{model.get('id')}"
+            base_model = civitai_data.get("base_model", "Unknown")
+            preview_url_api = civitai_data.get("preview_url", "")
+            
+            metadata_json = {
+                "id": existing_json.get("id") or model.get("id"),
+                "name": existing_json.get("name") or parent.get("name") or os.path.basename(lora_base_path),
+                "description": existing_json.get("description") or full_desc,
+                "sd version": existing_json.get("sd version") or base_model,
+                "activation text": existing_json.get("activation text") or trigger_words,
+                "tags": existing_json.get("tags") or tags,
+                "creator": existing_json.get("creator") or creator,
+                "url": existing_json.get("url") or model_url,
+                "preview_url": existing_json.get("preview_url") or preview_url_api,
+                "preferred weight": existing_json.get("preferred weight", 0),
+                "extensions": existing_json.get("extensions", {
+                    "sd_civitai_helper": {"version": "1.8.13-standalone", "last_update": int(time.time()), "skeleton_file": False}
+                }),
+                "negative text": existing_json.get("negative text", ""),
+                "notes": existing_json.get("notes", "")
+            }
+            
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata_json, f, indent=4, ensure_ascii=False)
             
             return web.json_response({"success": True, "cached": False, "data": civitai_data})
             
@@ -3778,53 +3594,59 @@ async def fetch_civitai_single(request):
 
 @server.PromptServer.instance.routes.get("/umiapp/loras/overrides")
 async def get_lora_overrides(request):
-    """Get manual overrides for LoRAs (nicknames, custom tags, custom preview)"""
-    overrides_path = os.path.join(os.path.dirname(__file__), "lora_overrides.json")
+    """Compile manual overrides from individual .json sidecar files."""
+    loras = folder_paths.get_filename_list("loras")
+    all_overrides = {}
 
-    if os.path.exists(overrides_path):
-        try:
-            with open(overrides_path, 'r', encoding='utf-8') as f:
-                overrides = json.load(f)
-            return web.json_response({"overrides": overrides})
-        except Exception as e:
-            print(f"[Umi LoRA Browser] Error loading overrides: {e}")
-            return web.json_response({"overrides": {}})
+    for lora_name in loras:
+        lora_path = folder_paths.get_full_path("loras", lora_name)
+        if not lora_path:
+            continue
+            
+        json_path = os.path.splitext(lora_path)[0] + ".json"
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Use the base name as the key for the frontend map
+                    base_name = os.path.splitext(lora_name)[0]
+                    all_overrides[base_name] = data
+            except Exception:
+                continue
 
-    return web.json_response({"overrides": {}})
+    return web.json_response({"overrides": all_overrides})
 
 @server.PromptServer.instance.routes.post("/umiapp/loras/overrides/save")
 async def save_lora_override(request):
-    """Save manual override for a specific LoRA"""
+    """Phase 8: Save manual activation tags directly to the LoRA's sidecar .json file."""
     try:
         data = await request.json()
         lora_name = data.get("lora_name")
-        override_data = data.get("override", {})
+        override_data = data.get("override_data") # Expecting {"activation text": "..."}
 
-        if not lora_name:
-            return web.json_response({"error": "LoRA name required"}, status=400)
+        lora_path = folder_paths.get_full_path("loras", lora_name)
+        if not lora_path:
+            return web.json_response({"error": "LoRA file not found"}, status=404)
 
-        overrides_path = os.path.join(os.path.dirname(__file__), "lora_overrides.json")
-
-        # Load existing overrides
-        overrides = {}
-        if os.path.exists(overrides_path):
+        # Target sidecar file: path/to/lora.json
+        json_path = os.path.splitext(lora_path)[0] + ".json"
+        
+        existing_data = {}
+        if os.path.exists(json_path):
             try:
-                with open(overrides_path, 'r', encoding='utf-8') as f:
-                    overrides = json.load(f)
-            except:
-                pass
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+            except: pass
+        
+        # Update/Merge activation tags
+        existing_data.update(override_data)
 
-        # Update override for this LoRA
-        overrides[lora_name] = override_data
-
-        # Save back to file
-        with open(overrides_path, 'w', encoding='utf-8') as f:
-            json.dump(overrides, f, indent=2, ensure_ascii=False)
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(existing_data, f, indent=2, ensure_ascii=False)
 
         return web.json_response({"success": True})
-
     except Exception as e:
-        print(f"[Umi LoRA Browser] Error saving override: {e}")
+        print(f"[Umi AI] Error saving local override: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
 # Image Browser helpers

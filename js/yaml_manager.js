@@ -455,6 +455,7 @@ class YAMLManager {
 }
 
 const yamlManager = new YAMLManager();
+window.umiYamlManager = yamlManager;
 
 app.registerExtension({
     name: "Umi.YAMLManager",

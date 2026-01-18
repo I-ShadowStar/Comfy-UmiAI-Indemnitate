@@ -832,14 +832,24 @@ class LoRAHandler(LoRAHandlerBase):
         except Exception:
             return None
 
-    def _get_override_tags(self, base_name):
-        overrides_path = os.path.join(self._cache_dir, "lora_overrides.json")
-        overrides = self._load_json_file(overrides_path) or {}
-        override = overrides.get(base_name, {})
-        tags = override.get("tags") if isinstance(override, dict) else None
-        if isinstance(tags, list):
-            return [str(t).strip() for t in tags if str(t).strip()]
-        return []
+    def _get_override_tags(self, lora_path):
+            """Lite Version: Check for local .json or .civitai.info sidecars."""
+            if not lora_path: return None
+            base = os.path.splitext(lora_path)[0]
+            
+            # Check .json (Standard) then .civitai.info (Civitai Helper)
+            for ext in [".json", ".civitai.info"]:
+                sidecar = base + ext
+                if os.path.exists(sidecar):
+                    try:
+                        with open(sidecar, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            # Look for common tag keys
+                            tags = data.get("activation text") or data.get("trainedWords") or data.get("tags")
+                            if tags:
+                                return tags if isinstance(tags, str) else ", ".join(tags)
+                    except: continue
+            return None
 
     def _get_civitai_info_tags(self, lora_path):
         civitai_info_path = os.path.splitext(lora_path)[0] + ".civitai.info"
@@ -849,34 +859,26 @@ class LoRAHandler(LoRAHandlerBase):
             return []
         return [t.strip() for t in activation_text.split(",") if t.strip()]
 
-    def _get_civitai_cache_tags(self, base_name):
-        cache_path = os.path.join(self._cache_dir, "civitai_cache.json")
-        cache = self._load_json_file(cache_path) or {}
-        civitai_data = cache.get(base_name, {})
-        tags = civitai_data.get("trigger_words")
-        if isinstance(tags, list):
-            return [str(t).strip() for t in tags if str(t).strip()]
-        return []
+    def _get_civitai_cache_tags(self, lora_path):
+            """Deprecated global cache lookup. Now redirects to local sidecar logic."""
+            return self._get_override_tags(lora_path)
 
-    def get_activation_tags(self, lora_name, lora_path, max_tags=20):
-        base_name = os.path.splitext(os.path.basename(lora_name))[0]
-        if lora_path:
-            base_name = os.path.splitext(os.path.basename(lora_path))[0]
+    def get_activation_tags(self, lora_name, lora_path, max_tags=5):
+            """Lite Version: Prioritize local sidecar files."""
+            override_tags = self._get_override_tags(lora_path)
+            if override_tags:
+                tags = [t.strip() for t in override_tags.split(',') if t.strip()]
+                return tags[:max_tags], "local_info"
 
-        override_tags = self._get_override_tags(base_name)
-        if override_tags:
-            return override_tags[:max_tags], "override"
-
-        if lora_path:
-            civitai_info_tags = self._get_civitai_info_tags(lora_path)
-            if civitai_info_tags:
-                return civitai_info_tags[:max_tags], "civitai_info"
-
-        civitai_cache_tags = self._get_civitai_cache_tags(base_name)
-        if civitai_cache_tags:
-            return civitai_cache_tags[:max_tags], "civitai_cache"
-
-        return [], "none"
+            if lora_path and lora_path.endswith(".safetensors"):
+                try:
+                    with safe_open(lora_path, framework="pt", device="cpu") as f:
+                        metadata = f.metadata()
+                        if metadata and "ss_tag_frequency" in metadata:
+                            return ["(Metadata tags found)"], "safetensors"
+                except:
+                    pass
+            return [], "none"
     
     def extract_and_load(self, text, model, clip, lora_behavior, cache_limit):
         lora_pattern = r'<lora:([^:>]+):([0-9.]+)>'

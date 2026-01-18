@@ -10,7 +10,16 @@ import os
 import importlib.util
 import glob
 import yaml
-import folder_paths # New Import for LoRA scanning
+import json
+import subprocess
+import sys
+import folder_paths 
+
+# --- New Imports for Lora Fetcher ---
+from .fetch.fetcher import CivitaiFetcher
+
+# Initialize the fetcher logic
+fetcher = CivitaiFetcher()
 
 try:
     from . import umi_utilities as _umi_utilities
@@ -159,6 +168,412 @@ def get_optional_dependency_status():
         else:
             installed.append(package_name)
     return {"installed": installed, "missing": missing}
+
+# ==============================================================================
+# LORA BROWSER ROUTES
+# ==============================================================================
+
+def get_target_file(filename):
+    """Wrapper to find the full path of a lora file."""
+    return folder_paths.get_full_path("loras", filename)
+
+@PromptServer.instance.routes.get("/umiapp/loras")
+async def get_loras(request):
+    """
+    Scans the Lora directory and returns a list of files 
+    along with their associated metadata (.json, .civitai.info) and preview images.
+    """
+    lora_names = folder_paths.get_filename_list("loras")
+    loras = []
+    base_models = set()
+    
+    for name in lora_names:
+        full_path = get_target_file(name)
+        if not full_path: continue
+        
+        base, ext = os.path.splitext(full_path)
+        
+        # Define sidecar file paths
+        civitai_info_path = f"{base}.civitai.info"
+        json_path = f"{base}.json"
+        preview_path = f"{base}.preview.png"
+        
+        civitai_data = {}
+        override_data = {}
+        civitai_info_tags = []
+        
+        # Load .civitai.info (Raw CivitAI data) and normalize structure
+        if os.path.exists(civitai_info_path):
+            try:
+                with open(civitai_info_path, 'r', encoding='utf-8') as f:
+                    raw_civitai_data = json.load(f)
+                    
+                    # Normalize the nested structure to match frontend expectations
+                    parent_model = raw_civitai_data.get("parent_model_data", {})
+                    model_id = raw_civitai_data.get("modelId") or raw_civitai_data.get("id") or parent_model.get("id")
+                    
+                    # Extract URL - check multiple possible locations
+                    url = raw_civitai_data.get("url")
+                    if not url and model_id:
+                        url = f"https://civitai.com/models/{model_id}"
+                    elif not url and parent_model.get("id"):
+                        url = f"https://civitai.com/models/{parent_model.get('id')}"
+                    
+                    # Extract preview URL from images array
+                    preview_url = None
+                    if raw_civitai_data.get("images"):
+                        images = raw_civitai_data["images"]
+                        if isinstance(images, list) and len(images) > 0:
+                            preview_url = images[0].get("url") if isinstance(images[0], dict) else None
+                    
+                    # Extract activation text/tags for civitai_info_tags
+                    activation_text = raw_civitai_data.get("activation text", "")
+                    if not activation_text:
+                        # Try to get from trainedWords
+                        trained_words = raw_civitai_data.get("trainedWords", [])
+                        if trained_words:
+                            activation_text = ", ".join(trained_words) if isinstance(trained_words, list) else str(trained_words)
+                    
+                    if activation_text:
+                        civitai_info_tags = [t.strip() for t in str(activation_text).split(",") if t.strip()]
+                    
+                    # Build normalized civitai_data structure
+                    civitai_data = {
+                        "id": model_id,
+                        "name": parent_model.get("name") or raw_civitai_data.get("name", ""),
+                        "description": parent_model.get("description") or raw_civitai_data.get("description", ""),
+                        "tags": parent_model.get("tags", raw_civitai_data.get("tags", [])),
+                        "trigger_words": raw_civitai_data.get("trainedWords", []),
+                        "base_model": raw_civitai_data.get("baseModel", "Unknown"),
+                        "preview_url": preview_url,
+                        "url": url,
+                        "creator": parent_model.get("creator", {}).get("username", raw_civitai_data.get("creator", "Unknown")),
+                        "nsfw": raw_civitai_data.get("nsfw", "None")
+                    }
+            except Exception as e:
+                print(f"[Umi LoRA Browser] Error loading .civitai.info for {name}: {e}")
+                civitai_data = {}
+                civitai_info_tags = []
+            
+        # Load .json (Manual/Override metadata)
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    json_data = json.load(f)
+                    # Map standard JSON fields to the format expected by our JS frontend
+                    activation_text = (
+                        json_data.get("activation text")
+                        or json_data.get("activation_text")
+                        or json_data.get("trainedWords")
+                        or json_data.get("trained_words")
+                        or json_data.get("triggerWords")
+                        or json_data.get("trigger_words")
+                        or ""
+                    )
+                    tags = json_data.get("tags", [])
+                    activation_tags = [t.strip() for t in str(activation_text).split(",") if t.strip()] if activation_text else []
+                    override_data = {
+                        "description": json_data.get("description", ""),
+                        "tags": tags,
+                        "activation_tags": activation_tags,
+                        "activation_text": activation_text,
+                        "nickname": json_data.get("name", ""),
+                        "preview_url": json_data.get("preview_url", "")
+                    }
+            except: pass
+
+        # Check for local preview image (support multiple extensions)
+        local_preview = None
+        preview_exts = [
+            ".preview.png", ".preview.jpg", ".preview.jpeg", ".preview.webp",
+            ".png", ".jpg", ".jpeg", ".webp"
+        ]
+        for ext in preview_exts:
+            preview_candidate = f"{base}{ext}"
+            if os.path.exists(preview_candidate):
+                # Pass the relative filename so we can fetch it via /umiapp/preview
+                local_preview = name.rsplit('.', 1)[0] + ext
+                break
+
+        base_model = civitai_data.get("base_model") or ""
+        if base_model:
+            base_models.add(str(base_model))
+
+        loras.append({
+            "name": name,
+            "filename": name,
+            "civitai": civitai_data,
+            "override": override_data,
+            "local_preview": local_preview,
+            "civitai_info_tags": civitai_info_tags,
+            "base_model": base_model
+        })
+
+    return web.json_response({"loras": loras, "base_models": sorted(base_models)})
+
+# Note: /umiapp/loras/civitai/single endpoint is handled in nodes.py
+# This endpoint was removed to avoid conflicts - nodes.py has more complete implementation
+# with hash-based lookup, name search fallback, and proper sidecar file handling
+
+@PromptServer.instance.routes.post("/umiapp/loras/civitai/batch")
+async def fetch_all_civitai(request):
+    """Trigger the fetcher.py logic for all files with a specific mode."""
+    data = await request.json()
+    mode = data.get("mode", "update_missing") # Default to update_missing
+    lora_names = folder_paths.get_filename_list("loras")
+    
+    processed_count = 0
+    results = []
+    
+    for lora_name in lora_names:
+        full_path = get_target_file(lora_name)
+        if full_path:
+            # Determine flags based on mode
+            force_fetch = False
+            fetch_preview = False
+            fetch_info = False
+            fetch_json = False
+            
+            if mode == "update_missing":
+                # Default behavior: fill gaps
+                force_fetch = False
+                fetch_preview = True
+                fetch_info = True
+                fetch_json = True
+            elif mode == "replace_previews":
+                force_fetch = False
+                fetch_preview = True
+                fetch_info = False
+                fetch_json = False
+            elif mode == "replace_civitai_info":
+                force_fetch = True # We want to replace this specific file
+                fetch_preview = False
+                fetch_info = True
+                fetch_json = False
+            elif mode == "replace_json_info":
+                force_fetch = True
+                fetch_preview = False
+                fetch_info = False
+                fetch_json = True
+            elif mode == "replace_json_and_civitai":
+                force_fetch = True
+                fetch_preview = False
+                fetch_info = True
+                fetch_json = True
+            elif mode == "replace_all":
+                force_fetch = True
+                fetch_preview = True
+                fetch_info = True
+                fetch_json = True
+            
+            actions = fetcher.process_file(full_path, 
+                                            force_fetch=force_fetch, 
+                                            fetch_preview=fetch_preview, 
+                                            fetch_info=fetch_info, 
+                                            fetch_json=fetch_json)
+            if actions:
+                processed_count += 1
+                results.append({"name": lora_name, "actions": actions})
+                
+    return web.json_response({"success": True, "count": processed_count, "results": results})
+
+@PromptServer.instance.routes.post("/umiapp/loras/overrides/save")
+async def save_overrides(request):
+    """Saves edits from the UI (tags, description, name) to the .json file."""
+    data = await request.json()
+    lora_name = data.get("lora_name")
+    override = data.get("override", {})
+    full_path = get_target_file(lora_name)
+    
+    if full_path:
+        base, _ = os.path.splitext(full_path)
+        json_path = f"{base}.json"
+        
+        existing = {}
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    existing = json.load(f)
+            except: pass
+            
+        # Update existing JSON with new values
+        existing["description"] = override.get("description", existing.get("description", ""))
+        if "tags" in override and override.get("tags") is not None:
+            existing["tags"] = override.get("tags", existing.get("tags", []))
+        if "activation_text" in override:
+            existing["activation text"] = override.get("activation_text", existing.get("activation text", ""))
+        existing["name"] = override.get("nickname", existing.get("name", ""))
+        existing["preview_url"] = override.get("preview_url", existing.get("preview_url", ""))
+        
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(existing, f, indent=4, ensure_ascii=False)
+            
+        return web.json_response({"success": True})
+
+    return web.json_response({"success": False})
+
+@PromptServer.instance.routes.post("/umiapp/loras/manage/open")
+async def open_location(request):
+    """Opens the file location in the OS file explorer."""
+    data = await request.json()
+    lora_name = data.get("lora_name")
+    full_path = get_target_file(lora_name)
+    
+    if full_path and os.path.exists(full_path):
+        folder = os.path.dirname(full_path)
+        if sys.platform == 'win32':
+            subprocess.Popen(['explorer', '/select,', full_path])
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', '-R', full_path])
+        else:
+            subprocess.Popen(['xdg-open', folder])
+        return web.json_response({"success": True})
+        
+    return web.json_response({"success": False})
+
+@PromptServer.instance.routes.post("/umiapp/loras/manage/delete")
+async def delete_lora(request):
+    """Deletes the Lora and its associated files."""
+    data = await request.json()
+    lora_name = data.get("lora_name")
+    full_path = get_target_file(lora_name)
+    
+    if full_path:
+        success, msg = fetcher.delete_lora_files(full_path)
+        return web.json_response({"success": success, "message": msg})
+        
+    return web.json_response({"success": False})
+
+@PromptServer.instance.routes.post("/umiapp/loras/upload_preview")
+async def upload_preview(request):
+    """Handles manual image upload for previews."""
+    reader = await request.multipart()
+    image_field = await reader.next()
+    lora_name_field = await reader.next()
+    
+    if not image_field or not lora_name_field:
+        return web.json_response({"success": False})
+        
+    lora_name = await lora_name_field.text()
+    full_path = get_target_file(lora_name)
+    
+    if full_path:
+        base, _ = os.path.splitext(full_path)
+        preview_path = f"{base}.preview.png"
+        
+        with open(preview_path, 'wb') as f:
+            while True:
+                chunk = await image_field.read_chunk()
+                if not chunk: break
+                f.write(chunk)
+                
+        return web.json_response({"success": True})
+
+    return web.json_response({"success": False})
+
+@PromptServer.instance.routes.post("/umiapp/loras/preview/replace_url")
+async def replace_preview_from_url(request):
+    """Download a preview image from URL and save alongside the LoRA."""
+    try:
+        data = await request.json()
+        lora_name = data.get("lora_name")
+        url = data.get("url")
+        if not lora_name or not url:
+            return web.json_response({"success": False, "error": "lora_name and url required"}, status=400)
+
+        full_path = get_target_file(lora_name)
+        if not full_path:
+            full_path = get_target_file(f"{lora_name}.safetensors")
+        if not full_path:
+            return web.json_response({"success": False, "error": "File not found"}, status=404)
+
+        try:
+            resp = requests.get(url, timeout=20)
+            if resp.status_code != 200:
+                return web.json_response({"success": False, "error": "Failed to download image"}, status=400)
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)}, status=500)
+
+        content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+        ext_map = {
+            "image/png": ".preview.png",
+            "image/jpeg": ".preview.jpg",
+            "image/jpg": ".preview.jpg",
+            "image/webp": ".preview.webp",
+        }
+        preview_ext = ext_map.get(content_type, ".preview.png")
+
+        base, _ = os.path.splitext(full_path)
+        # Remove existing preview sidecars (keep non-preview images)
+        for ext in [".preview.png", ".preview.jpg", ".preview.jpeg", ".preview.webp"]:
+            path = f"{base}{ext}"
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+        preview_path = f"{base}{preview_ext}"
+        with open(preview_path, "wb") as f:
+            f.write(resp.content)
+
+        rel_base = os.path.splitext(lora_name)[0]
+        return web.json_response({"success": True, "path": f"{rel_base}{preview_ext}"})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+@PromptServer.instance.routes.post("/umiapp/loras/internal_tags")
+async def get_internal_tags(request):
+    """Extract internal training tags from LoRA safetensors metadata."""
+    try:
+        data = await request.json()
+        lora_name = data.get("lora_name")
+        if not lora_name:
+            return web.json_response({"success": False, "error": "lora_name required"}, status=400)
+
+        lora_path = get_target_file(lora_name)
+        if not lora_path:
+            lora_path = get_target_file(f"{lora_name}.safetensors")
+        if not lora_path:
+            return web.json_response({"success": False, "error": "LoRA file not found"}, status=404)
+
+        if not lora_path.endswith(".safetensors"):
+            return web.json_response({"success": True, "tags": []})
+
+        # Reuse blacklist similar to LoRAHandler
+        blacklist = {
+            "1girl", "1boy", "solo", "monochrome", "greyscale", "comic", "scenery",
+            "translated", "commentary_request", "highres", "absurdres", "masterpiece",
+            "best quality", "simple background", "white background", "transparent background"
+        }
+
+        from safetensors import safe_open
+        tags = []
+        tag_pairs = []
+        with safe_open(lora_path, framework="pt", device="cpu") as f:
+            metadata = f.metadata() or {}
+            tags_str = metadata.get("ss_tag_frequency", "{}")
+            try:
+                tag_freq = json.loads(tags_str)
+                if isinstance(tag_freq, dict):
+                    all_tags = {}
+                    for sub_dict in tag_freq.values():
+                        if isinstance(sub_dict, dict):
+                            all_tags.update(sub_dict)
+                    sorted_tags = sorted(all_tags.items(), key=lambda x: x[1], reverse=True)
+                    tag_pairs = [{"tag": t, "count": int(c)} for t, c in sorted_tags if t.lower() not in blacklist]
+                    tags = [p["tag"] for p in tag_pairs]
+            except Exception:
+                tags = []
+
+        return web.json_response({"success": True, "tags": tags, "tag_pairs": tag_pairs})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+# ==============================================================================
+# EXISTING ROUTES (WILDCARDS, UTILITIES, MODELS)
+# ==============================================================================
 
 # Register the routes (aligned with nodes.py endpoints)
 @PromptServer.instance.routes.get("/umiapp/wildcards")
@@ -343,7 +758,6 @@ async def get_emotions(request):
     if not os.path.exists(config_path):
         return web.json_response({"error": "emotions.json not found"}, status=404)
     
-    import json
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -371,11 +785,31 @@ async def get_emotion_image(request):
 
 
 @PromptServer.instance.routes.get("/umiapp/preview")
-async def preview_wildcard(request):
-    """Preview the contents of a wildcard file for hover tooltips."""
+async def preview_content(request):
+    """Unified preview route: Handles Lora Image Previews (path) and Wildcard File Previews (file)."""
+    
+    # 1. Handle Lora Image Preview (path param)
+    path = request.query.get("path", "")
+    if path:
+        lora_roots = folder_paths.get_folder_paths("loras")
+        # Absolute path: allow only if inside lora roots
+        if os.path.isabs(path):
+            abs_path = os.path.abspath(path)
+            for root in lora_roots:
+                if os.path.commonpath([abs_path, os.path.abspath(root)]) == os.path.abspath(root):
+                    if os.path.exists(abs_path):
+                        return web.FileResponse(abs_path)
+            return web.Response(status=403, text="Access denied")
+        # Relative path: resolve under lora roots
+        for root in lora_roots:
+            candidate = os.path.join(root, path)
+            if os.path.exists(candidate):
+                return web.FileResponse(candidate)
+
+    # 2. Handle Wildcard Preview (file param) - Legacy logic
     filename = request.query.get("file", "")
     if not filename:
-        return web.json_response({"error": "No file specified"}, status=400)
+        return web.json_response({"error": "No file or path specified"}, status=400)
     
     wildcards_path = os.path.join(os.path.dirname(__file__), "wildcards")
     entries = []
@@ -505,7 +939,6 @@ async def refresh_wildcards(request):
 # MODEL DOWNLOADER API (VNCCS-STYLE REPO SUPPORT)
 # ==============================================================================
 
-import json
 import asyncio
 import threading
 import traceback

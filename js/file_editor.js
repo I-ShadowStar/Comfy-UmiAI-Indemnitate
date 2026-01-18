@@ -418,6 +418,7 @@ class FileEditor {
 
 // Global instance
 const fileEditor = new FileEditor();
+window.umiFileEditor = fileEditor;
 
 // Register extension
 app.registerExtension({

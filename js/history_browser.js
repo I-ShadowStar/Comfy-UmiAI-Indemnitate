@@ -387,6 +387,7 @@ class HistoryBrowser {
 
 // Global instance
 const historyBrowser = new HistoryBrowser();
+window.umiHistoryBrowser = historyBrowser;
 
 // Register extension
 app.registerExtension({
