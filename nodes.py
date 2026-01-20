@@ -40,7 +40,7 @@ from .shared_utils import (
     escape_unweighted_colons, parse_wildcard_weight, get_all_wildcard_paths, log_prompt_to_history,
     LogicEvaluator, DynamicPromptReplacer, VariableReplacer, NegativePromptGenerator,
     ConditionalReplacer, TagLoaderBase, TagSelectorBase, LoRAHandlerBase, TagReplacerBase,
-    CharacterReplacer, resolve_lora_alias
+    CharacterReplacer, resolve_lora_alias, strip_prompt_comments, expand_prompt_files
 )
 
 # ==============================================================================
@@ -211,6 +211,7 @@ def load_umi_settings():
         'csv_namespace': True,  # Add $csv_ prefixed variables for CSV columns
         'yaml_namespace': True,  # Add $yaml_ prefixed variables for YAML entries
         'rng_streams': False,  # Use deterministic RNG streams per scope/tag
+        'lint_cleaner_enabled': True,  # Enable the prompt linting and cleaning UI
     }
     
     if os.path.exists(settings_path):
@@ -492,7 +493,7 @@ class TagLoader(TagLoaderBase):
                 try:
                     with open(full_path, 'r', encoding='utf-8') as f:
                         content = f.read().strip()
-                    return content
+                    return strip_prompt_comments(content)
                 except Exception as e:
                     if self.verbose:
                         print(f"[UmiAI] Error reading prompt file {full_path}: {e}")
@@ -2117,21 +2118,7 @@ class UmiAIWildcardNode:
         # CORE PROCESSING
         # ============================================================
         
-        protected_text = text.replace('__#', '___UMI_HASH_PROTECT___').replace('<#', '<___UMI_HASH_PROTECT___')
-        clean_lines = []
-        for line in protected_text.splitlines():
-            if '//' in line:
-                line = line.split('//')[0]
-            if '#' in line and not line.strip().startswith("#"):
-                 if ' #' in line:
-                    line = line.split(' #')[0]
-            
-            line = line.strip()
-            if line:
-                clean_lines.append(line)
-        
-        text = "\n".join(clean_lines)
-        text = text.replace('___UMI_HASH_PROTECT___', '#').replace('<___UMI_HASH_PROTECT___', '<#')
+        text = strip_prompt_comments(text)
 
         options = {
             'verbose': False, 
@@ -2182,6 +2169,9 @@ class UmiAIWildcardNode:
 
             prompt_history.append(prompt)
             previous_prompt = prompt
+
+            # Pre-expand prompt files so variables apply in the same pass
+            prompt = expand_prompt_files(prompt, tag_loader)
 
             prompt = variable_replacer.store_variables(prompt, tag_replacer, dynamic_replacer)
             tag_selector.update_variables(variable_replacer.variables)
@@ -3354,6 +3344,7 @@ async def get_wildcards(request):
         "basenames": basenames,
         "loras": loras,
         "use_folder_paths": use_folder_paths,  # Include setting so frontend knows
+        "lint_cleaner_enabled": UMI_SETTINGS.get('lint_cleaner_enabled', True),
     })
 
 # Note: /umiapp/loras is handled in __init__.py to provide normalized civitai fields.

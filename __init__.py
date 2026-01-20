@@ -1,7 +1,8 @@
 from .nodes import (UmiAIWildcardNode, UmiSaveImage, UmiPoseGenerator, UmiEmotionGenerator,
                     UmiEmotionStudio, UmiCharacterCreator as UmiCharacterCreator2,
                     UmiSpriteGenerator as UmiSpriteGenerator2, UmiDatasetGenerator as UmiDatasetGenerator2,
-                    UmiPositionControl as UmiPositionControl2, UmiVisualCameraControl as UmiVisualCameraControl2)
+                    UmiPositionControl as UmiPositionControl2, UmiVisualCameraControl as UmiVisualCameraControl2,
+                    UMI_SETTINGS)
 from .nodes_lite import UmiAIWildcardNodeLite
 from .nodes_model_manager import UmiModelManager, UmiModelSelector
 from server import PromptServer
@@ -150,7 +151,8 @@ def get_wildcard_data():
         "yaml_files": sorted(yaml_files),     # YAML file names
         "tags": sorted(list(tags)),           # Tags from YAML (for <[ autocomplete)
         "basenames": basenames,               # Basename -> full path mapping
-        "loras": folder_paths.get_filename_list("loras")
+        "loras": folder_paths.get_filename_list("loras"),
+        "lint_cleaner_enabled": UMI_SETTINGS.get('lint_cleaner_enabled', True),
     }
 
 def get_optional_dependency_status():

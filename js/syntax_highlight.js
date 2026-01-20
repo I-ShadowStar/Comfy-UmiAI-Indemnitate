@@ -41,6 +41,7 @@ const HIGHLIGHT_COLORS = {
 // Store known wildcards and loras for validation
 let knownWildcards = [];
 let knownLoras = [];
+let lintCleanerEnabled = true;
 
 // Cache for wildcard previews
 const previewCache = new Map();
@@ -51,9 +52,11 @@ async function fetchWildcardsForLinting() {
         const response = await fetch("/umiapp/wildcards");
         if (response.ok) {
             const data = await response.json();
-            knownWildcards = data.files || data.wildcards || [];
             knownLoras = data.loras || [];
-            console.log(`[UmiAI Lint] Loaded ${knownWildcards.length} wildcards, ${knownLoras.length} loras`);
+            if (data.lint_cleaner_enabled !== undefined) {
+                lintCleanerEnabled = data.lint_cleaner_enabled;
+            }
+            console.log(`[UmiAI Lint] Loaded ${knownWildcards.length} wildcards, ${knownLoras.length} loras. Linting: ${lintCleanerEnabled}`);
         }
     } catch (e) {
         console.error("[UmiAI Lint] Failed to fetch wildcards:", e);
@@ -765,9 +768,62 @@ function highlightSyntax(text, errors = []) {
 
     // Order matters! Apply patterns from most specific to least specific
 
-    // 1. Comments (lines starting with # or //)
-    result = result.replace(/(^|\n)(#[^\n]*)/g, '$1<span class="umi-hl-comment">$2</span>');
-    result = result.replace(/(^|\n)(\/\/[^\n]*)/g, '$1<span class="umi-hl-comment">$2</span>');
+    // 1. Comments (protect ranges so later regex doesn't re-color them)
+    const commentPlaceholders = [];
+    const addCommentPlaceholder = (content) => {
+        const token = `%%UMI_COMMENT_${commentPlaceholders.length}%%`;
+        commentPlaceholders.push(`<span class="umi-hl-comment">${content}</span>`);
+        return token;
+    };
+
+    const protectComments = (value) => {
+        const lines = value.split('\n');
+        const processed = lines.map((line) => {
+            if (line.startsWith('#')) {
+                return addCommentPlaceholder(line);
+            }
+
+            let out = '';
+            let i = 0;
+            let inComment = false;
+            let commentStart = 0;
+
+            while (i < line.length) {
+                if (line[i] === '/' && i + 1 < line.length && line[i + 1] === '/') {
+                    if (inComment) {
+                        const commentText = line.slice(commentStart, i + 2);
+                        out += addCommentPlaceholder(commentText);
+                        inComment = false;
+                        i += 2;
+                        continue;
+                    }
+                    commentStart = i;
+                    inComment = true;
+                    i += 2;
+                    continue;
+                }
+
+                if (inComment) {
+                    i += 1;
+                    continue;
+                }
+
+                out += line[i];
+                i += 1;
+            }
+
+            if (inComment) {
+                const commentText = line.slice(commentStart);
+                out += addCommentPlaceholder(commentText);
+            }
+
+            return out;
+        });
+
+        return processed.join('\n');
+    };
+
+    result = protectComments(result);
 
     // 2. LoRA tags: <lora:name:strength> or <lora:name>
     result = result.replace(/(&lt;lora:[^&]*?&gt;)/gi, '<span class="umi-hl-lora">$1</span>');
@@ -815,6 +871,12 @@ function highlightSyntax(text, errors = []) {
 
     // 15. LoRA trigger words: <sks>, <ohwx>, <lora_trigger>, etc.
     result = result.replace(/(&lt;(?!lora:|lyco:)[a-zA-Z0-9_-]+&gt;)/gi, '<span class="umi-hl-trigger">$1</span>');
+
+    // Restore protected comment ranges
+    commentPlaceholders.forEach((content, index) => {
+        const token = `%%UMI_COMMENT_${index}%%`;
+        result = result.split(token).join(content);
+    });
 
     // Add trailing newline to match textarea behavior
     result += "\n";
@@ -894,14 +956,27 @@ function applyHighlighting(textareaEl, widget = null) {
     // Apply transparent overlay style to textarea
     textareaEl.classList.add("umi-syntax-textarea");
 
-    // Add some bottom padding for the lint bar
-    textareaEl.style.paddingBottom = "26px";
-    backdrop.style.paddingBottom = "26px";
+    if (lintCleanerEnabled) {
+        // Add some bottom padding for the lint bar
+        textareaEl.style.paddingBottom = "26px";
+        backdrop.style.paddingBottom = "26px";
 
-    // Insert backdrop before textarea
-    parent.insertBefore(backdrop, textareaEl);
-    parent.appendChild(lintBar);
-    parent.appendChild(errorPanel);
+        // Insert backdrop before textarea
+        parent.insertBefore(backdrop, textareaEl);
+        parent.appendChild(lintBar);
+        parent.appendChild(errorPanel);
+    } else {
+        // No extra padding if lint bar is hidden
+        textareaEl.style.paddingBottom = "6px";
+        backdrop.style.paddingBottom = "6px";
+
+        // Still insert backdrop for highlighting
+        parent.insertBefore(backdrop, textareaEl);
+        
+        // Hide UI elements if they exist
+        lintBar.style.display = "none";
+        errorPanel.style.display = "none";
+    }
 
     // Store current errors for the panel
     let currentErrors = [];
@@ -958,36 +1033,20 @@ function applyHighlighting(textareaEl, widget = null) {
 
     // Auto-clean function
     const autoClean = (text) => {
-        let cleaned = text;
+        if (!text) return "";
 
-        // Remove multiple spaces -> single space
-        cleaned = cleaned.replace(/  +/g, ' ');
+        const cleanSegment = (segment) => {
+            let cleaned = segment.replace(/\s+/g, ' ');
+            cleaned = cleaned.replace(/(?:\s*,\s*)+/g, ', ');
+            cleaned = cleaned.replace(/^[,\s]+|[,\s]+$/g, '').trim();
+            cleaned = cleaned.replace(/\s+/g, ' ');
+            return cleaned;
+        };
 
-        // Remove comma sequences with spaces (  ,  ,  ,  -> ,)
-        cleaned = cleaned.replace(/[,\s]*,[,\s]*/g, ', ');
+        const parts = text.split(/\s*[,\.]*\s*\bBREAK\b\s*[,\.]*\s*/i);
+        const cleanedParts = parts.map(cleanSegment).filter(Boolean);
 
-        // Remove duplicate commas
-        cleaned = cleaned.replace(/,+/g, ',');
-
-        // Clean spaces before commas
-        cleaned = cleaned.replace(/\s+,/g, ',');
-
-        // Ensure single space after comma
-        cleaned = cleaned.replace(/,([^\s])/g, ', $1');
-
-        // BREAK handling: remove commas around BREAK, ensure spaces
-        cleaned = cleaned.replace(/,?\s*BREAK\s*,?/g, ' BREAK ');
-
-        // Clean up any double spaces created
-        cleaned = cleaned.replace(/  +/g, ' ');
-
-        // Remove leading whitespace per line
-        cleaned = cleaned.replace(/^[\t ]+/gm, '');
-
-        // Remove leading/trailing commas from lines
-        cleaned = cleaned.split('\n').map(line => line.trim().replace(/^,+\s*|\s*,+$/g, '').trim()).join('\n');
-
-        return cleaned;
+        return cleanedParts.join(' BREAK ');
     };
 
     // Update error panel content (display only - no fix buttons due to ComfyUI event issues)
@@ -1067,7 +1126,7 @@ function applyHighlighting(textareaEl, widget = null) {
         let text = textareaEl.value;
 
         // Apply auto-clean if enabled
-        if (autoCleanEnabled) {
+        if (autoCleanEnabled && lintCleanerEnabled) {
             const cleaned = autoClean(text);
             if (cleaned !== text) {
                 const cursorPos = textareaEl.selectionStart;
@@ -1077,14 +1136,14 @@ function applyHighlighting(textareaEl, widget = null) {
             }
         }
 
-        const errors = lintPrompt(text);
+        const errors = lintCleanerEnabled ? lintPrompt(text) : [];
         currentErrors = errors;
 
         // Update highlighting
         backdrop.innerHTML = highlightSyntax(text, errors);
 
         // Update lint bar text (not the whole bar, to preserve button)
-        if (errors.length === 0) {
+        if (!lintCleanerEnabled || errors.length === 0) {
             lintBar.className = "umi-lint-bar umi-lint-bar-clean";
             lintText.innerHTML = '<span class="umi-lint-icon">✓</span> No issues';
             lintBar.title = "";

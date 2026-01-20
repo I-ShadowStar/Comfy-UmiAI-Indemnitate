@@ -17,10 +17,10 @@ from datetime import datetime
 
 # Import shared utilities
 from .shared_utils import (
-    escape_unweighted_colons, parse_wildcard_weight, log_prompt_to_history,
+    escape_unweighted_colons, parse_wildcard_weight, log_prompt_to_history, expand_prompt_files,
     LogicEvaluator, DynamicPromptReplacer, VariableReplacer, NegativePromptGenerator,
     ConditionalReplacer, TagLoaderBase, TagSelectorBase, LoRAHandlerBase, TagReplacerBase,
-    CharacterReplacer, resolve_lora_alias
+    CharacterReplacer, resolve_lora_alias, strip_prompt_comments
 )
 
 # Import UMI_SETTINGS from main nodes for syncing toggle
@@ -226,7 +226,7 @@ class TagLoader(TagLoaderBase):
                         try:
                             with open(full_path, 'r', encoding='utf-8') as f:
                                 content = f.read().strip()
-                            return content
+                            return strip_prompt_comments(content)
                         except Exception as e:
                             if self.verbose:
                                 print(f"[UmiAI Lite] Error reading prompt file {full_path}: {e}")
@@ -1131,33 +1131,24 @@ class UmiAIWildcardNodeLite:
         - Ensures one space before and after BREAK
         """
         import re
-        
-        # First, normalize all whitespace to single spaces
-        text = re.sub(r'\s+', ' ', text)
-        
-        # Remove multiple consecutive commas (with optional spaces between)
-        text = re.sub(r',\s*,+', ',', text)
-        text = re.sub(r',\s*,', ',', text)  # catch any remaining
-        
-        # Clean spaces around commas: remove space before comma, normalize after
-        text = re.sub(r'\s+,', ',', text)  # no space before comma
-        text = re.sub(r',\s+', ', ', text)  # single space after comma
-        
-        # Handle BREAK keyword (case insensitive)
-        # Remove commas and extra spaces around BREAK, ensure " BREAK "
-        # Pattern: optional comma/spaces, BREAK, optional comma/spaces
-        text = re.sub(r'[,\s]*\bBREAK\b[,\s]*', ' BREAK ', text, flags=re.IGNORECASE)
-        
-        # Normalize multiple BREAKs with stuff between
-        text = re.sub(r'BREAK\s+BREAK', 'BREAK', text, flags=re.IGNORECASE)
-        
-        # Final cleanup
-        text = re.sub(r'\s+', ' ', text)  # normalize spaces again
-        text = text.strip().strip(',')
-        text = re.sub(r'^,\s*', '', text)  # remove leading comma
-        text = re.sub(r'\s*,$', '', text)  # remove trailing comma
-        
-        return text
+
+        if not text:
+            return ""
+
+        def _clean_segment(segment):
+            segment = re.sub(r'\s+', ' ', segment)
+            segment = re.sub(r'(?:\s*,\s*)+', ', ', segment)
+            segment = segment.strip(' ,')
+            segment = re.sub(r'\s+', ' ', segment).strip()
+            return segment
+
+        parts = re.split(r'\s*[,\.]*\s*\bBREAK\b\s*[,\.]*\s*', text, flags=re.IGNORECASE)
+        cleaned_parts = [p for p in (_clean_segment(part) for part in parts) if p]
+
+        if not cleaned_parts:
+            return ""
+
+        return " BREAK ".join(cleaned_parts)
 
     def process(self, **kwargs):
         text = self.get_val(kwargs, "text", "", str)
@@ -1186,43 +1177,7 @@ class UmiAIWildcardNodeLite:
         # ============================================================
 
         # Strip comments: // toggles comment mode until newline or another //
-        # Protect __# and <# patterns first
-        protected_text = text.replace('__#', '___UMI_HASH_PROTECT___').replace('<#', '<___UMI_HASH_PROTECT___')
-
-        def strip_double_slash_comments(text_block):
-            cleaned_lines = []
-            for line in text_block.splitlines():
-                i = 0
-                in_comment = False
-                out = []
-                while i < len(line):
-                    if line[i] == '/' and i + 1 < len(line) and line[i + 1] == '/':
-                        in_comment = not in_comment
-                        i += 2
-                        continue
-                    if in_comment:
-                        i += 1
-                        continue
-                    out.append(line[i])
-                    i += 1
-                cleaned_lines.append("".join(out))
-            return "\n".join(cleaned_lines)
-
-        protected_text = strip_double_slash_comments(protected_text)
-        
-        clean_lines = []
-        for line in protected_text.splitlines():
-            # Handle # comments (inline, not at start of line)
-            if '#' in line and not line.strip().startswith("#"):
-                 if ' #' in line:
-                    line = line.split(' #')[0]
-
-            line = line.strip()
-            if line:
-                clean_lines.append(line)
-
-        text = "\n".join(clean_lines)
-        text = text.replace('___UMI_HASH_PROTECT___', '#').replace('<___UMI_HASH_PROTECT___', '<#')
+        text = strip_prompt_comments(text)
 
         options = {
             'verbose': False,
@@ -1268,6 +1223,9 @@ class UmiAIWildcardNodeLite:
 
             prompt_history.append(prompt)
             previous_prompt = prompt
+
+            # Pre-expand prompt files so variables apply in the same pass
+            prompt = expand_prompt_files(prompt, tag_loader)
 
             prompt = variable_replacer.store_variables(prompt, tag_replacer, dynamic_replacer)
             tag_selector.update_variables(variable_replacer.variables)

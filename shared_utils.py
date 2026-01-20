@@ -29,6 +29,83 @@ FILE_MTIME_CACHE = {}
 ALIAS_CACHE = {}
 
 
+def strip_prompt_comments(text):
+    """
+    Strip prompt comments while preserving // toggle rules and inline # comments.
+    - // toggles comment mode until next // or end of line
+    - # comments are stripped when preceded by a space (' #')
+    """
+    if not text:
+        return ""
+
+    protected_text = text.replace('__#', '___UMI_HASH_PROTECT___').replace('<#', '<___UMI_HASH_PROTECT___')
+
+    def _strip_double_slash_comments(line):
+        i = 0
+        in_comment = False
+        out = []
+        while i < len(line):
+            if line[i] == '/' and i + 1 < len(line) and line[i + 1] == '/':
+                in_comment = not in_comment
+                i += 2
+                continue
+            if in_comment:
+                i += 1
+                continue
+            out.append(line[i])
+            i += 1
+        return "".join(out)
+
+    clean_lines = []
+    for line in protected_text.splitlines():
+        line = _strip_double_slash_comments(line)
+        if '#' in line and not line.strip().startswith("#"):
+            if ' #' in line:
+                line = line.split(' #')[0]
+        line = line.strip()
+        if line:
+            clean_lines.append(line)
+
+    cleaned = "\n".join(clean_lines)
+    return cleaned.replace('___UMI_HASH_PROTECT___', '#').replace('<___UMI_HASH_PROTECT___', '<#')
+
+
+def expand_prompt_files(text, tag_loader, max_depth=5):
+    """Expand __@prompt__ file references without other wildcard processing."""
+    if not text:
+        return ""
+
+    pattern = re.compile(r'__@([a-zA-Z0-9_\-\/\s]+)__')
+    expanded = text
+
+    for _ in range(max_depth):
+        match = pattern.search(expanded)
+        if not match:
+            break
+
+        def _replace(match_obj):
+            filename = match_obj.group(1).strip()
+            content = tag_loader.load_prompt_file(filename)
+            if not content:
+                content = f"[PROMPT_FILE_NOT_FOUND: {filename}]"
+
+            start = match_obj.start()
+            end = match_obj.end()
+            before = expanded[start - 1] if start > 0 else ""
+            after = expanded[end] if end < len(expanded) else ""
+
+            if content:
+                if before and before != "\n":
+                    content = "\n" + content
+                if after and after != "\n":
+                    content = content + "\n"
+            return content
+
+        expanded = pattern.sub(_replace, expanded, count=1)
+
+    return expanded
+
+
 def _lock_path_for(target_path):
     return f"{target_path}.lock"
 
@@ -587,11 +664,6 @@ class LogicEvaluator:
                     tokens.append(current.strip())
                     current = ""
                 tokens.append(char)
-                i += 1
-            elif char.isspace():
-                if current.strip():
-                    tokens.append(current.strip())
-                    current = ""
                 i += 1
             else:
                 # Check for symbolic operators first (these don't need word boundaries)
@@ -1934,7 +2006,7 @@ class TagLoaderBase:
             if os.path.exists(file_path):
                 try:
                     with open(file_path, 'r', encoding='utf-8') as f:
-                        return f.read().strip()
+                        return strip_prompt_comments(f.read().strip())
                 except Exception as e:
                     if self.verbose:
                         print(f"[UmiAI] Error reading prompt file {file_path}: {e}")

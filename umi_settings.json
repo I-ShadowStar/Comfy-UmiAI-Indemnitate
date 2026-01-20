@@ -1,7 +1,12 @@
 {
+    // Show wildcards as __Series/MyFile__ instead of __MyFile__
     "use_folder_paths": false,
+    // Add $csv_ prefixed variables for CSV columns during processing
     "csv_namespace": true,
+    // Add $yaml_ prefixed variables for YAML entries during processing
     "yaml_namespace": true,
+    // Use deterministic RNG streams per scope/tag for reproducible results
     "rng_streams": false,
-    "_comment": "Set use_folder_paths to true to show wildcards as __Series/MyFile__ instead of __MyFile__"
+    // Enable or disable the prompt linting and cleaning UI banner in UmiAI nodes
+    "lint_cleaner_enabled": false
 }
