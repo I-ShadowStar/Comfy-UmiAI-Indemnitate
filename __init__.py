@@ -1,7 +1,8 @@
-from .nodes import (UmiAIWildcardNode, UmiSaveImage, UmiPoseGenerator, UmiEmotionGenerator,
-                    UmiEmotionStudio, UmiCharacterCreator as UmiCharacterCreator2,
-                    UmiSpriteGenerator as UmiSpriteGenerator2, UmiDatasetGenerator as UmiDatasetGenerator2,
-                    UmiPositionControl as UmiPositionControl2, UmiVisualCameraControl as UmiVisualCameraControl2,
+from .nodes import (UmiSaveImage,
+                    # UmiPoseGenerator, UmiEmotionGenerator,
+                    # UmiEmotionStudio, UmiCharacterCreator as UmiCharacterCreator2,
+                    # UmiSpriteGenerator as UmiSpriteGenerator2, UmiDatasetGenerator as UmiDatasetGenerator2,
+                    # UmiPositionControl as UmiPositionControl2, UmiVisualCameraControl as UmiVisualCameraControl2,
                     UMI_SETTINGS)
 from .nodes_lite import UmiAIWildcardNodeLite
 from .nodes_model_manager import UmiModelManager, UmiModelSelector
@@ -22,21 +23,25 @@ from .fetch.fetcher import CivitaiFetcher
 # Initialize the fetcher logic
 fetcher = CivitaiFetcher()
 
-try:
-    from . import umi_utilities as _umi_utilities
-except Exception:
-    try:
-        import umi_utilities as _umi_utilities
-    except Exception:
-        _umi_utilities = None
+# Disabled optional modules
+_umi_utilities = None
+_bgrm = None
 
-try:
-    from . import bgrm as _bgrm
-except Exception:
-    try:
-        import bgrm as _bgrm
-    except Exception:
-        _bgrm = None
+# try:
+#     from . import umi_utilities as _umi_utilities
+# except Exception:
+#     try:
+#         import umi_utilities as _umi_utilities
+#     except Exception:
+#         _umi_utilities = None
+#
+# try:
+#     from . import bgrm as _bgrm
+# except Exception:
+#     try:
+#         import bgrm as _bgrm
+#     except Exception:
+#         _bgrm = None
 
 # 1. Setup the API Route
 def _resolve_umi_asset_path(*parts):
@@ -1374,25 +1379,27 @@ async def get_download_progress(request):
 
 # 2. Mappings
 CORE_NODE_CLASS_MAPPINGS = {
-    "UmiAIWildcardNode": UmiAIWildcardNode,
-    "UmiAIWildcardNodeLite": UmiAIWildcardNodeLite,
+    "UmiAIWildcardNode": UmiAIWildcardNodeLite,  # Unified node - both names map to same class
+    "UmiAIWildcardNodeLite": UmiAIWildcardNodeLite,  # Unified node - both names map to same class
     "UmiSaveImage": UmiSaveImage,
-    "UmiPoseGenerator": UmiPoseGenerator,
-    "UmiEmotionGenerator": UmiEmotionGenerator,
-    "UmiEmotionStudio": UmiEmotionStudio,
-    "UmiCharacterDesigner": UmiCharacterCreator2,
+    # Disabled nodes - uncomment to re-enable
+    # "UmiPoseGenerator": UmiPoseGenerator,
+    # "UmiEmotionGenerator": UmiEmotionGenerator,
+    # "UmiEmotionStudio": UmiEmotionStudio,
+    # "UmiCharacterDesigner": UmiCharacterCreator2,
     "UmiModelManager": UmiModelManager,
     "UmiModelSelector": UmiModelSelector,
 }
 
 CORE_NODE_DISPLAY_NAME_MAPPINGS = {
     "UmiAIWildcardNode": "UmiAI Wildcard Processor",
-    "UmiAIWildcardNodeLite": "UmiAI Wildcard Processor (Lite)",
+    "UmiAIWildcardNodeLite": "UmiAI Wildcard Processor",  # Unified - same display name
     "UmiSaveImage": "Umi Save Image (with metadata)",
-    "UmiPoseGenerator": "Umi Pose Generator",
-    "UmiEmotionGenerator": "Umi Emotion Generator",
-    "UmiEmotionStudio": "Umi Emotion Studio",
-    "UmiCharacterDesigner": "Umi Character Designer",
+    # Disabled nodes - uncomment to re-enable
+    # "UmiPoseGenerator": "Umi Pose Generator",
+    # "UmiEmotionGenerator": "Umi Emotion Generator",
+    # "UmiEmotionStudio": "Umi Emotion Studio",
+    # "UmiCharacterDesigner": "Umi Character Designer",
     "UmiModelManager": "Umi Model Manager",
     "UmiModelSelector": "Umi Model Selector",
 }

@@ -310,6 +310,21 @@ class ImageBrowser {
                     border-top: 1px solid #20242c;
                     background: #10141d;
                 }
+                .umi-ib-page-input {
+                    background: transparent;
+                    border: 1px solid #3b4250;
+                    color: #8fc6ff;
+                    width: 35px;
+                    text-align: center;
+                    font-size: 11px;
+                    border-radius: 4px;
+                    margin: 0 4px;
+                    padding: 2px 4px;
+                }
+                .umi-ib-page-input:focus {
+                    outline: none;
+                    border-color: #64b5f6;
+                }
                 .umi-ib-details-empty {
                     color: #7b8499;
                     text-align: center;
@@ -447,7 +462,6 @@ class ImageBrowser {
                             <option value="30" selected>30</option>
                             <option value="60">60</option>
                         </select>
-                        <button class="umi-ib-btn" data-action="compare" disabled>Compare</button>
                         <button class="umi-ib-btn" data-action="close">Close</button>
                     </div>
                 </div>
@@ -606,9 +620,6 @@ class ImageBrowser {
             this.resetFilters();
         });
 
-        const compareBtn = this.element.querySelector('[data-action="compare"]');
-        compareBtn.addEventListener('click', () => this.showCompare());
-
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.element.style.display === 'flex') {
                 if (this.compareOverlay && this.compareOverlay.style.display === 'flex') {
@@ -718,7 +729,92 @@ class ImageBrowser {
         this.renderGrid();
         this.renderPagination();
         this.renderFacets();
-        this.updateCompareButton();
+    }
+
+    async loadImagesProgressive() {
+        const grid = this.element.querySelector('[data-role="grid"]');
+        const title = this.element.querySelector('.umi-ib-title');
+        const originalTitle = title ? title.textContent : '';
+
+        grid.innerHTML = '<div class="umi-ib-details-empty">Loading images...</div>';
+
+        // Phase 1: Quick load with cached data
+        await this.fetchImages(true);
+        const hasCachedData = this.images.some(img => img.metadata && Object.keys(img.metadata).length > 0);
+
+        // Render immediately with cached data (if any)
+        this.renderGrid();
+        this.renderPagination();
+        this.renderFacets();
+
+        // Phase 2: Background full load for uncached images
+        // Only do this if we have images without metadata
+        const hasUncachedImages = this.images.some(img => !img.metadata || Object.keys(img.metadata).length === 0);
+
+        if (hasUncachedImages) {
+            // Show loading indicator in title
+            if (title) {
+                title.textContent = `${originalTitle} (Loading metadata...)`;
+                title.style.opacity = '0.7';
+            }
+
+            // Fetch full metadata in background
+            await this.fetchImages(false);
+
+            // Smoothly update the grid (no flash, just update existing cards)
+            this.updateGridMetadata();
+            this.renderPagination();
+            this.renderFacets();
+
+            // Restore title
+            if (title) {
+                title.textContent = originalTitle;
+                title.style.opacity = '1';
+            }
+        }
+    }
+
+    updateGridMetadata() {
+        // Update existing cards with new metadata without re-rendering entire grid
+        // This prevents the flash by only updating the data that changed
+        const grid = this.element.querySelector('[data-role="grid"]');
+
+        this.images.forEach(img => {
+            const card = grid.querySelector(`[data-id="${CSS.escape(img.relative_path)}"]`);
+            if (!card) return;
+
+            // Update metadata in imageMap
+            this.imageMap.set(img.relative_path, img);
+
+            // Update resolution if it changed
+            const metaDiv = card.querySelector('.umi-ib-card-sub');
+            if (metaDiv && img.metadata) {
+                const resolution = `${img.metadata?.width || '?'}x${img.metadata?.height || '?'}`;
+                const size = (img.size / 1024).toFixed(1);
+                metaDiv.textContent = `${resolution} | ${size} KB`;
+            }
+
+            // Update prompt badge if metadata now available
+            const thumb = card.querySelector('.umi-ib-thumb');
+            const hasPrompt = img.metadata && (img.metadata.prompt || img.metadata.umi_prompt);
+            const existingBadge = thumb.querySelector('.umi-ib-badge');
+
+            if (hasPrompt && !existingBadge) {
+                const badge = document.createElement('div');
+                badge.className = 'umi-ib-badge';
+                badge.textContent = 'Prompt';
+                thumb.appendChild(badge);
+            }
+        });
+
+        // Update details panel if image is selected
+        if (this.selectedImage) {
+            const updatedImage = this.imageMap.get(this.selectedImage.relative_path);
+            if (updatedImage) {
+                this.selectedImage = updatedImage;
+                this.renderDetails();
+            }
+        }
     }
 
     renderGrid() {
@@ -799,7 +895,6 @@ class ImageBrowser {
         this.selectedImage = img;
         this.renderGrid();
         this.renderDetails();
-        this.updateCompareButton();
     }
 
     renderPagination() {
@@ -813,7 +908,7 @@ class ImageBrowser {
 
         pagination.innerHTML = `
             <button class="umi-ib-btn" data-page="${this.currentPage - 1}" ${this.currentPage === 0 ? 'disabled' : ''}>Prev</button>
-            <span class="umi-ib-chip">Page ${this.currentPage + 1} of ${totalPages} (${this.totalImages})</span>
+            <span class="umi-ib-chip">Page <input type="text" class="umi-ib-page-input" value="${this.currentPage + 1}" /> of ${totalPages} (${this.totalImages})</span>
             <button class="umi-ib-btn" data-page="${this.currentPage + 1}" ${this.currentPage >= totalPages - 1 ? 'disabled' : ''}>Next</button>
         `;
 
@@ -823,6 +918,23 @@ class ImageBrowser {
                 this.loadImages();
             });
         });
+
+        // Page jump input
+        const pageInput = pagination.querySelector('.umi-ib-page-input');
+        if (pageInput) {
+            pageInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    let val = parseInt(e.target.value, 10);
+                    if (!isNaN(val) && val > 0 && val <= totalPages) {
+                        this.currentPage = val - 1;
+                        this.loadImages();
+                    } else {
+                        e.target.value = this.currentPage + 1;
+                    }
+                }
+            });
+            pageInput.addEventListener('click', (e) => e.target.select());
+        }
     }
 
     renderFacets() {
@@ -1015,14 +1127,6 @@ LoRAs: ${(derived.loras || []).length ? this.escapeHtml((derived.loras || []).jo
         currentTags.add(value);
         input.value = '';
         this.updateAnnotations(this.selectedImage.relative_path, { tags: Array.from(currentTags) });
-    }
-
-    updateCompareButton() {
-        const compareBtn = this.element.querySelector('[data-action="compare"]');
-        if (!compareBtn) return;
-        const size = this.selectedIds.size;
-        compareBtn.disabled = size < 2;
-        compareBtn.textContent = size >= 2 ? `Compare (${size})` : 'Compare';
     }
 
     showCompare() {
@@ -1237,10 +1341,7 @@ LoRAs: ${(derived.loras || []).length ? this.escapeHtml((derived.loras || []).jo
 
         this.element.style.display = 'block';
         this.currentPage = 0;
-        await this.loadImages(true);
-        setTimeout(() => {
-            this.loadImages(false);
-        }, 400);
+        await this.loadImagesProgressive();
     }
 
     hide() {

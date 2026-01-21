@@ -373,6 +373,7 @@ regex:^SDXL.* - Regex search
       const activationText = activations.tags.join(" ").toLowerCase();
       
       // Path Filter
+      // When pathFilter is empty, show all loras (root folder shows everything)
       if (this.pathFilter !== "") {
         const relativeFilter = this.pathFilter.replace(/^Lora\//, "").toLowerCase();
         if (!name.startsWith(relativeFilter)) return false;
@@ -880,6 +881,7 @@ regex:^SDXL.* - Regex search
     this.recalculatePageSize();
     this.renderFolderTree();
     this.renderBaseModelFilters();
+    this.renderLoras();
   }
 
   renderLoras() {

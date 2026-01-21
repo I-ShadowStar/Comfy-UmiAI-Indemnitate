@@ -13,6 +13,9 @@ class ShortcutsPanel {
                     { keys: "Ctrl+I", description: "Open Image Browser", icon: "🖼️" },
                     { keys: "Ctrl+P", description: "Open Preset Manager", icon: "💾" },
                     { keys: "Ctrl+H", description: "Open Prompt History", icon: "📜" },
+                    { keys: "Ctrl+E", description: "Open File Editor", icon: "📝" },
+                    { keys: "Ctrl+Shift+Y", description: "Open YAML Tag Manager", icon: "🏷️" },
+                    { keys: "Ctrl+M", description: "Open Model Manager", icon: "🔧" },
                     { keys: "Ctrl+?", description: "Show Keyboard Shortcuts", icon: "⌨️" }
                 ]
             },
@@ -20,17 +23,31 @@ class ShortcutsPanel {
                 category: "Panel Actions",
                 items: [
                     { keys: "ESC", description: "Close active panel", icon: "✕" },
-                    { keys: "Click outside", description: "Close active panel", icon: "🖱️" }
+                    { keys: "Click outside", description: "Close active panel", icon: "🖱️" },
+                    { keys: "Ctrl+Shift+B", description: "Fix syntax errors (in text field)", icon: "🔧" }
                 ]
             },
             {
                 category: "Wildcard Syntax",
                 items: [
-                    { keys: "__filename__", description: "Simple wildcard", icon: "📝" },
-                    { keys: "__~filename__", description: "Sequential wildcard", icon: "🔄" },
-                    { keys: "__@filename__", description: "Load full file as prompt", icon: "📄" },
+                    { keys: "__filename__", description: "Random line from file", icon: "🎲" },
+                    { keys: "__@filename__", description: "Load entire file content", icon: "📄" },
+                    { keys: "__2-4$$filename__", description: "Pick 2-4 random lines", icon: "🔢" },
+                    { keys: "__@scope:tag__", description: "Scoped RNG wildcard", icon: "🎯" },
                     { keys: "<[tag]>", description: "YAML tag selection", icon: "🏷️" },
-                    { keys: "{option1|option2}", description: "Dynamic choice", icon: "🎲" }
+                    { keys: "{option1|option2}", description: "Dynamic choice", icon: "🎲" },
+                    { keys: "{25%A|75%B}", description: "Weighted choice", icon: "⚖️" }
+                ]
+            },
+            {
+                category: "Autocomplete Triggers",
+                items: [
+                    { keys: "__", description: "Wildcard files (random line)", icon: "📝" },
+                    { keys: "__@", description: "Prompt files (full content)", icon: "📄" },
+                    { keys: "<[", description: "YAML tags", icon: "🏷️" },
+                    { keys: "<lora:", description: "LoRA models", icon: "📦" },
+                    { keys: "$", description: "Variables from globals.yaml", icon: "💬" },
+                    { keys: "comma/space", description: "Tag autocomplete (from CSV)", icon: "🔤" }
                 ]
             },
             {
@@ -40,8 +57,19 @@ class ShortcutsPanel {
                     { keys: "[tag1 OR tag2]", description: "Either tag", icon: "∨" },
                     { keys: "[NOT tag]", description: "Exclude tag", icon: "¬" },
                     { keys: "[tag1 XOR tag2]", description: "Exactly one tag", icon: "⊕" },
-                    { keys: "[tag1 NAND tag2]", description: "NOT(both tags)", icon: "⊼" },
-                    { keys: "[tag1 NOR tag2]", description: "NOT(either tag)", icon: "⊽" }
+                    { keys: "[if cond : true | false]", description: "Conditional logic", icon: "❓" }
+                ]
+            },
+            {
+                category: "Variables & Special",
+                items: [
+                    { keys: "$var={A|B}", description: "Define variable", icon: "💾" },
+                    { keys: "$var", description: "Use variable", icon: "💬" },
+                    { keys: "${var|fallback}", description: "Variable with default", icon: "🔄" },
+                    { keys: "<lora:name:1.0>", description: "Load LoRA", icon: "📦" },
+                    { keys: "@@w=1024, h=1536@@", description: "Set resolution", icon: "📐" },
+                    { keys: "--neg: text", description: "Negative prompt", icon: "⛔" },
+                    { keys: "// comment", description: "Add comment", icon: "💭" }
                 ]
             }
         ];

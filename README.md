@@ -10,6 +10,22 @@ UmiAI transforms static prompts into dynamic, context-aware workflows. It introd
 
 ---
 
+## 🔄 Recent Updates
+
+**Streamlined Node Structure:**
+- Consolidated full and lite nodes into a unified `UmiAIWildcardNode`
+- Disabled many specialized nodes by default (can be re-enabled in `__init__.py`)
+- Core functionality remains: wildcard processing, LoRA loading, logic engine, variables
+
+**New Features:**
+- **Prompt Files (`__@filename__`)**: Load entire file content instead of random lines
+- **Tag Autocomplete**: Forge-style tag suggestions from CSV files in `autocomplete-tags/` folder (enabled by default)
+- **Settings-Based Features**: Toggle LLM/Vision, Danbooru API, and tag autocomplete via `umi_settings.json`
+
+**Active Nodes:** UmiAIWildcardNode, UmiSaveImage, UmiModelManager, UmiModelSelector
+
+---
+
 ## ✨ Key Features
 
 ### 🔋 Prompt Processing & Logic
@@ -39,16 +55,18 @@ UmiAI transforms static prompts into dynamic, context-aware workflows. It introd
 * **🧪 Debug Summary:** Set `$debug={1}` to auto-prepend a compact `<<DBG ...>>` line with seed/run and last pick info (disable with `$debug_summary=0`).
 * **🧭 Trace Mode:** Set `$trace={1}` to include provenance (`<<TRACE ...>>`) like branch, source, and variable origins (disable with `$trace_summary=0`).
 * **💡 Smart Autocomplete:** Type trigger characters for suggestions:
-  - `__` → Wildcard files
+  - `__` → Wildcard files (random line from file)
+  - `__@` → Prompt files (entire file content)
   - `<[` → YAML tags
   - `<lora:` → LoRA models
   - `$` → Variables from globals.yaml
+  - After comma/space → Tag suggestions from autocomplete-tags CSV files (enabled by default, requires CSV files in `autocomplete-tags/` folder)
 * **👁️ Wildcard Preview:** Hover over any `__wildcard__` to see its contents.
 
-### 🤖 AI-Powered Features
-* **👁️ Vision Models (Optional):** Use `[VISION: custom instruction]` to describe images with local AI models (JoyCaption Alpha-2, LLava-1.5).
-* **🧠 Integrated Local LLM:** Turn simple tag lists into rich natural language descriptions using `[LLM: tag soup]` syntax (Qwen 2.5, Dolphin-Llama3.1).
-* **🎨 Danbooru Integration:** Type `char:character_name` to automatically fetch visual tags from the Danbooru API with configurable filtering.
+### 🤖 AI-Powered Features (Optional)
+* **👁️ Vision Models (Optional):** Use `[VISION: custom instruction]` to describe images with local AI models (JoyCaption Alpha-2, LLava-1.5). Enable with `enable_llm_features` in settings.
+* **🧠 Integrated Local LLM (Optional):** Turn simple tag lists into rich natural language descriptions using `[LLM: tag soup]` syntax (Qwen 2.5, Dolphin-Llama3.1). Enable with `enable_llm_features` in settings.
+* **🎨 Danbooru Integration (Optional):** Type `char:character_name` to automatically fetch visual tags from the Danbooru API with configurable filtering. Enable with `enable_danbooru_features` in settings.
 * **⚙️ Temperature Control:** Separate temperature controls for vision and text LLM models for precise output tuning.
 
 ### 🎯 LoRA Management
@@ -81,8 +99,46 @@ UmiAI transforms static prompts into dynamic, context-aware workflows. It introd
 * **🔁 Recursive Processing:** Iterative prompt refinement with cycle detection (max 50 passes).
 * **🎯 Seeded Determinism:** Reproducible random selections via seed control for consistent results.
 * **🧭 RNG Streams:** Optional deterministic sub-streams per tag/scope (toggle `rng_streams`, use `$rng_scope` to group or `__@scope:tag__` per pick).
-* **⚙️ Settings File:** Configure `use_folder_paths`, `csv_namespace`, `yaml_namespace`, and `rng_streams` in `umi_settings.json`.
+* **⚙️ Settings File:** Configure behavior via `umi_settings.json`:
+  - `use_folder_paths`: Show wildcards as `__Series/MyFile__` instead of `__MyFile__`
+  - `csv_namespace`: Add `$csv_` prefixed variables for CSV columns
+  - `yaml_namespace`: Add `$yaml_` prefixed variables for YAML entries
+  - `rng_streams`: Use deterministic RNG streams per scope/tag
+  - `lint_cleaner_enabled`: Enable/disable prompt linting UI banner
+  - `enable_llm_features`: Enable LLM/Vision features (adds image input, vision_model, refiner_model, temperatures, max_tokens, custom_system_prompt, update_llama_cpp button)
+  - `enable_danbooru_features`: Enable Danbooru API integration (adds danbooru_threshold, danbooru_max_tags parameters)
+  - `enable_tag_autocomplete`: Enable tag autocomplete from CSV files (default: true)
 * **🧷 Aliases:** Add `aliases.yaml` in any wildcards folder to map wildcard/LoRA aliases.
+
+---
+
+## 📦 Active Nodes
+
+This custom node package has been streamlined to focus on core functionality. The following nodes are currently active:
+
+### Core Nodes (Always Available)
+* **UmiAIWildcardNode / UmiAIWildcardNodeLite**: Unified wildcard processor with full logic engine, LoRA loading, and prompt processing
+* **UmiSaveImage**: Enhanced image saving with metadata
+* **UmiModelManager**: Download and manage recommended models
+* **UmiModelSelector**: Model selection helper
+
+### Disabled Nodes (Hidden from Menu)
+The following nodes are disabled by default but can be re-enabled by uncommenting imports in `__init__.py`:
+* UmiPoseGenerator
+* UmiEmotionGenerator
+* UmiEmotionStudio
+* UmiCharacterCreator
+* UmiSpriteGenerator
+* UmiDatasetGenerator
+* UmiPositionControl
+* UmiVisualCameraControl
+
+### Optional Modules (Disabled by Default)
+* `umi_utilities` - Character system, sheet tools, QWEN encoder
+* `bgrm` - Background removal utilities
+* `camerangle` - 3D camera angle selector
+
+**Note:** Most advanced features (character consistency, pose library, camera control, dataset generation) were originally in separate nodes but are now integrated into the main wildcard processor or disabled to simplify the node list.
 
 ---
 
@@ -99,22 +155,30 @@ UmiAI transforms static prompts into dynamic, context-aware workflows. It introd
     ```bash
     pip install -r requirements.txt
     ```
-5.  **Restart ComfyUI** completely.
+5.  **(Optional) Autocomplete Tags:** For Danbooru/E621-style tag autocomplete, place CSV files in the `autocomplete-tags/` folder inside the custom node directory. The node will load these tags for autocomplete suggestions when typing prompts. This feature is **enabled by default** (disable with `"enable_tag_autocomplete": false` in `umi_settings.json`).
+6.  **Restart ComfyUI** completely.
 
 ### Method 2: ComfyUI Manager
 * **Install via Git URL:** Copy the URL of this repository and paste it into ComfyUI Manager.
 
 ### Optional: Utilities Node (sheet tools, QWEN, dataset helpers)
-Utilities live in a separate custom node folder called `umi_utilities`. Install it only if you want the VNCCS-inspired tools (sheet tools, QWEN detailer/encoder, dataset helpers, character manager, presets).
+**Note:** The utilities node (`umi_utilities`) is currently disabled by default. These features include:
+- Sheet tools (RMBG2, sheet cropper, mask utilities)
+- QWEN detailer/encoder
+- Dataset helpers
+- Character manager
+- Pose/Emotion/Scene nodes
+- Camera control
 
-The sheet tools (RMBG2, sheet cropper, mask utilities) and QWEN encoder require extra Python packages:
-```bash
-pip install opencv-python torchvision transformers transparent-background
-```
-If these are not installed, the related nodes will report a clear runtime error when used.
+To enable these nodes, uncomment the relevant imports and node registrations in `__init__.py`.
 
 ### Optional: Local LLM Support
-For vision and text LLM features, the node will automatically download and install `llama-cpp-python` when you first use these features. The installer detects your CUDA version and installs the appropriate build (CUDA 11.7, 11.8, 12.1, 12.4, or CPU).
+LLM and Vision features are **disabled by default**. To enable:
+1. Edit `umi_settings.json` in the custom node folder
+2. Set `"enable_llm_features": true`
+3. Restart ComfyUI
+
+When enabled, the node will automatically download and install `llama-cpp-python` when you first use these features. The installer detects your CUDA version and installs the appropriate build (CUDA 11.7, 11.8, 12.1, 12.4, or CPU).
 
 You can disable auto-updates in the node settings if you prefer manual installation.
 
@@ -170,6 +234,7 @@ The UmiAI node acts as the "Central Brain". You must pass your **Model** and **C
 | **CSV Namespace** | `$csv_name` | `$csv_outfit` |
 | **YAML Namespace** | `$yaml_title` | `$yaml_tags` |
 | **Wildcards** | `__filename__` | `__colors__` |
+| **Prompt Files** | `__@filename__` | `__@long_description__` |
 | **Scoped RNG Wildcard** | `__@scope:tag__` | `__@style:colors__` |
 | **Weighted Range** | `1-3$$filename` | `2-4$$accessories__` |
 | **YAML Tags** | `<[tagname]>` | `<[Demihuman]>` |
@@ -275,7 +340,12 @@ __[(fire OR ice) AND NOT water]__
 
 ---
 
-## 🤖 AI-Powered Features
+## 🤖 AI-Powered Features (Optional)
+
+**Enable these features:**
+1. Edit `umi_settings.json`
+2. Set `"enable_llm_features": true`
+3. Restart ComfyUI
 
 ### 👁️ Vision Models (Image Captioning)
 
@@ -298,12 +368,13 @@ A detailed illustration of [VISION: describe the character], $style style
 ```
 
 **Setup:**
-1. Connect an image to the UmiAI node's image input
-2. Select a vision model from the dropdown
-3. Use `[VISION: instruction]` tags in your prompt
-4. The model runs on CPU to preserve GPU VRAM
+1. Enable LLM features in `umi_settings.json`
+2. Connect an image to the UmiAI node's image input
+3. Select a vision model from the dropdown (appears when enabled)
+4. Use `[VISION: instruction]` tags in your prompt
+5. The model runs on CPU to preserve GPU VRAM
 
-**Settings:**
+**Settings (When Enabled):**
 * **Vision Temperature**: Controls creativity (default 0.5)
 * **Vision Max Tokens**: Limits description length
 
@@ -328,11 +399,12 @@ Turn "tag soup" (e.g., 1girl, solo, beach) into lush, descriptive prose using a 
 ```
 
 **Setup:**
-1. In the `llm_model` widget, select "Download Recommended"
-2. Choose your preferred model (Qwen for speed, Dolphin for quality)
-3. Use `[LLM: tags]` syntax in your prompt
+1. Enable LLM features in `umi_settings.json`
+2. In the `llm_model` widget (appears when enabled), select "Download Recommended"
+3. Choose your preferred model (Qwen for speed, Dolphin for quality)
+4. Use `[LLM: tags]` syntax in your prompt
 
-**Customization:**
+**Customization (When Enabled):**
 * **Temperature**: Controls creativity (0.7 is standard, lower for literal, higher for creative)
 * **Max Tokens**: Limits description length (600 = ~1 paragraph)
 * **Custom System Prompt**: Override default behavior
@@ -392,7 +464,9 @@ UmiAI uses LRU (Least Recently Used) caching to efficiently manage LoRA models i
 
 ---
 
-## 🎭 Character Consistency System
+## 🎭 Character Consistency System (Disabled by Default)
+
+**Note:** The following nodes are currently disabled. To enable, uncomment the relevant imports in `__init__.py`.
 
 Maintain consistent character appearances across multiple generations with outfit and emotion variations.
 
@@ -409,31 +483,7 @@ ComfyUI-UmiAI/
         reference.png
 ```
 
-### Creating a Character Profile
-
-Create `umi_utilities/characters/[name]/profile.yaml`:
-
-```yaml
-name: Elena
-base_prompt: 'elena, silver hair, long hair, blue eyes, fair skin'
-lora: elena_character_v1
-lora_strength: 0.8
-
-outfits:
-  casual:
-    prompt: 'casual clothes, t-shirt, jeans'
-  formal:
-    prompt: 'elegant black dress, high heels'
-  combat:
-    prompt: 'battle armor, wielding sword'
-
-emotions:
-  happy: 'smiling, happy expression, bright eyes'
-  sad: 'tearful eyes, sad expression'
-  angry: 'furrowed brow, intense eyes'
-```
-
-### Inline Syntax
+### Inline Syntax (Still Works in Main Node)
 
 Use the `@@character:outfit:emotion@@` syntax directly in your prompts:
 
@@ -451,160 +501,101 @@ Use the `@@character:outfit:emotion@@` syntax directly in your prompts:
 A portrait of @@elena:formal:happy@@ in a garden, __ArtStyle__
 ```
 
-### Character Manager Node
+The character syntax is processed by the main UmiAI Wildcard node even when the dedicated character nodes are disabled.
 
-**UmiAI Character Manager** - Single character prompt builder:
-- Inputs: character (dropdown), outfit, emotion, pose
-- Outputs: `prompt`, `negative`, `lora_string`, `reference_image`, `pose_image`
-- Connect `reference_image` to IP-Adapter, `pose_image` to ControlNet
+### Disabled Nodes (Uncomment in __init__.py to re-enable)
 
-### Character Batch Generator Node
-
-**UmiAI Character Batch Generator** - Generate all variations:
-- Modes: `all_outfits`, `all_emotions`, `all_poses`, `outfit_emotion_matrix`
-- Outputs: `prompts_list`, `labels_list`, `count`
-- Use with batch processing nodes for sprite sheet generation
-
-### Sprite Export Node
-
-**UmiAI Sprite Export** - Organized output:
-- Saves to: `output/sprites/character/outfit/emotion_pose.png`
-- Formats: PNG, WebP
-- Auto-organizes by character for easy management
-
-### Character Info Node
-
-**UmiAI Character Info** - Profile debugging:
-- Outputs: character_info, outfits_list, emotions_list, poses_list, counts
-- Useful for workflow planning and debugging
-
-### API Endpoint
-
-Access character data via API for external tools (requires `umi_utilities` installed):
-```
-GET /umiapp/characters
-```
-Returns: character names, outfits, emotions, poses for each profile
+- **UmiAI Character Manager** - Single character prompt builder
+- **UmiAI Character Batch Generator** - Generate all variations
+- **UmiAI Sprite Export** - Organized output
+- **UmiAI Character Info** - Profile debugging
 
 ---
 
-## 🎬 Camera Control & Pose System
+## 🎬 Camera Control & Pose System (Disabled by Default)
 
-### Camera Control Nodes
+**Note:** The following nodes are currently disabled. To enable, uncomment the relevant imports in `__init__.py`.
 
-Generate camera angle prompts for multi-angle LoRAs:
+### Disabled Nodes
 
-| Node | Description |
-| :--- | :--- |
-| **UmiAI Camera Control** | Slider-based azimuth/elevation/distance |
-| **UmiAI Visual Camera Control** | Interactive canvas widget |
+- **UmiAI Camera Control** - Slider-based azimuth/elevation/distance
+- **UmiAI Visual Camera Control** - Interactive canvas widget
+- **UmiAI Pose Library** - 30+ built-in poses
+- **UmiAI Expression Mixer** - Blend emotions with weights
+- **UmiAI Scene Composer** - Combine backgrounds, lighting, atmosphere
 
-**Features:**
-- Azimuth: 0-360° (snaps to 45° increments)
-- Elevation: -30° to 60° (low angle → high angle)
-- Distance: close-up, medium shot, wide shot
-- Configurable trigger word (default: `<sks>`)
-
-**Output example:** `<sks> front view eye-level shot medium shot`
-
-### Pose Library
-
-**UmiAI Pose Library** - 30+ built-in poses loaded from `umi_utilities/presets/poses.yaml`:
-- Categories: standing, sitting, action, expressive, lying, kneeling, leaning
-- Outputs: `pose_prompt`, `pose_tags`
-
-### Expression Mixer
-
-**UmiAI Expression Mixer** - Blend emotions with weights:
-- 40+ emotions from `umi_utilities/presets/emotions.yaml`
-- Mix up to 3 emotions with percentage weights
-- Example: happy:60% + excited:40%
-
-### Scene Composer
-
-**UmiAI Scene Composer** - Combine backgrounds, lighting, atmosphere:
-- 50+ backgrounds from `umi_utilities/presets/scenes.yaml`
-- 11 lighting styles
-- 10 atmosphere presets
-
-### Adding Custom Presets
-
-Edit the YAML files in `umi_utilities/presets/` folder:
-
-```yaml
-# In umi_utilities/presets/poses.yaml
-my_custom_pose:
-  prompt: "your pose description"
-  tags: ["tag1", "tag2"]
-```
+These features can be re-enabled by uncommenting the node registrations in the `__init__.py` file.
 
 ---
 
-## 📊 LoRA Dataset Generation
+## 📊 LoRA Dataset Generation (Disabled by Default)
 
-Generate training data for LoRA fine-tuning:
+**Note:** The following nodes are currently disabled. To enable, uncomment the relevant imports in `__init__.py`.
 
-### Dataset Export
+### Disabled Nodes
 
-**UmiAI Dataset Export** - Kohya-compatible output:
-- Formats: kohya, dreambooth, simple
-- Auto-generates captions from character profiles
-- Flip augmentation support
-- Configurable repeats
+- **UmiAI Dataset Export** - Kohya-compatible output
+- **UmiAI Auto Caption** - Wrapper for external captioners
+- **UmiAI Caption Enhancer** - Combine captions with character info
+- **UmiAI Caption Generator** - Build captions from components
 
-### Caption Nodes
-
-| Node | Description |
-| :--- | :--- |
-| **UmiAI Auto Caption** | Wrapper for external captioners (BLIP, WD14) |
-| **UmiAI Caption Enhancer** | Combine captions with character info |
-| **UmiAI Caption Generator** | Build captions from components |
+These features can be re-enabled by uncommenting the node registrations in the `__init__.py` file.
 
 ---
 
 ## 📦 Bundled Wildcards
 
-UmiAI includes ready-to-use wildcards in the `wildcards/` folder:
+UmiAI includes ready-to-use wildcards in the `wildcards/` folder. You can add your own .txt, .yaml, and .csv files to extend the system.
 
-| Wildcard | Contents |
-| :--- | :--- |
-| `__poses__` | 40+ character poses |
-| `__emotions__` | 45+ facial expressions |
-| `__backgrounds__` | 40+ environments |
-| `__lighting__` | 30+ lighting setups |
-
-**Usage in prompts:**
+**Basic usage:**
 ```text
-A portrait of @@elena:casual@@ with __emotions__, __poses__, __backgrounds__, __lighting__
+// Random line from file
+__colors__
+
+// Full file content
+__@long_description__
+
+// Weighted range (2-4 random lines)
+__2-4$$accessories__
+
+// YAML tag search
+<[Demihuman AND Dark Skin]>
+```
+
+**Example prompts:**
+```text
+A portrait of a character with __emotions__ expression, __poses__, __backgrounds__, __lighting__
+
+[LLM: __character_traits__, standing at __locations__]
 ```
 
 ---
 
 ## 🔧 Model Manager
 
-Download recommended models directly in ComfyUI:
+The **UmiModelManager** node allows you to download recommended models directly in ComfyUI.
 
-**Open:** Press `Ctrl+Shift+M`
+**Available in Node Menu:** UmiModelManager
 
 ### Available Categories:
-- **Character LoRAs** - Consistency LoRAs
+- **LoRAs** - Style and character LoRAs
 - **ControlNets** - Pose, depth, canny
 - **Upscalers** - 2x and 4x models
+- **LLMs** - Local language models (when LLM features enabled)
 
-If `umi_utilities` is installed, the Model Manager also shows utilities-only categories (QWEN helpers, segmentation, SAM, background removal, LLMs).
+**Note:** If optional modules are enabled, additional model categories may appear.
 
 ---
 
 ## 🎥 Sample Workflows
 
-Import ready-to-use workflows from `workflows/` folder:
+Import ready-to-use workflows from the `sample workflow/` folder:
 
 | Workflow | Description |
 | :--- | :--- |
-| `character_basic.json` | Character Manager → Sampler |
-| `character_batch.json` | Batch Generator → Sprite Export |
-| `camera_control.json` | Visual Camera → Character |
-| `lora_dataset.json` | Full dataset generation pipeline |
+| `UmiAI-Sample.json` | Basic wildcard processing with LoRA loading |
+
+**Note:** Example workflows for character system, camera control, and dataset generation are currently disabled. To use these features, re-enable the corresponding nodes in `__init__.py`.
 
 ---
 
@@ -628,6 +619,38 @@ Purple
 // Pick 2-4 random colors
 __2-4$$colors__
 ```
+
+### 1.5. Prompt Files - Full Text File Loading
+The `__@filename__` syntax loads the **entire file content** as a single block of text, instead of picking a random line like wildcards do.
+
+**Difference between wildcards and prompt files:**
+- `__colors__` → Picks ONE random line from colors.txt
+- `__@colors__` → Loads the ENTIRE contents of colors.txt
+
+**Use Case:** Perfect for loading long, pre-written prompts or multi-paragraph descriptions.
+
+Create `wildcards/fantasy_scene.txt`:
+```text
+A grand medieval castle stands atop a mountain peak,
+surrounded by swirling clouds and ancient forests.
+Dragons circle the towers as knights patrol the ramparts.
+The setting sun casts golden light across the stone walls.
+```
+
+**Usage:** Type `__@` to open autocomplete and select `__@fantasy_scene__`. The entire file content will be inserted.
+
+```text
+// Load complete prompt file
+__@fantasy_scene__
+
+// Combine with other features
+__@fantasy_scene__, in the style of __ArtStyles__, <lora:fantasy_v1:0.8>
+
+// Use in conditionals
+[if $theme=epic : __@fantasy_scene__ | __@modern_scene__]
+```
+
+**Note:** Prompt files use the same autocomplete menu as wildcards (showing all .txt files in the wildcards folder), but behave differently when processed.
 
 ### 2. Advanced Tag Lists (.yaml)
 Create `wildcards/characters.yaml`:
@@ -726,11 +749,59 @@ $artist: {artist1|artist2|artist3}
 
 These variables are available in all prompts without needing to define them each time.
 
+### 5. Tag Autocomplete (Danbooru/E621 Style)
+UmiAI supports Forge-style tag autocomplete from CSV files, perfect for Danbooru/E621 tag databases.
+
+**Note:** This feature is **enabled by default**. To disable, set `"enable_tag_autocomplete": false` in `umi_settings.json`.
+
+**Setup:**
+1. Place CSV files in the `autocomplete-tags/` folder inside the custom node directory
+2. CSV format: One tag per line in the first column (other columns ignored)
+3. Multiple CSV files are automatically merged
+
+Example CSV (`autocomplete-tags/danbooru_tags.csv`):
+```csv
+1girl
+solo
+standing
+beach
+sunset
+happy_expression
+blue_eyes
+long_hair
+```
+
+**Usage:**
+- Type any text after a comma or space
+- When you've typed 2+ characters, autocomplete suggestions appear
+- Press Enter or click to insert the tag
+- Supports fuzzy matching (type "longhair" to find "long_hair")
+
+**Example in prompt:**
+```text
+masterpiece, 1gi[autocomplete suggests: 1girl]
+1girl, so[autocomplete suggests: solo, socks, source_anime, ...]
+1girl, solo, blu[autocomplete suggests: blue_eyes, blue_hair, blush, ...]
+```
+
+**Performance:**
+- Autocomplete is query-based (filtered on the server)
+- Only returns up to 50 matches per query
+- Large tag databases (100k+ tags) load efficiently
+- Tags are cached in memory after first load
+
+**Note:** This is separate from Danbooru API integration (`char:character_name`). Tag autocomplete is purely local and works offline.
+
 ---
 
-## 🎨 Danbooru Character Integration
+## 🎨 Danbooru Character Integration (Optional Feature)
 
 Automatically fetch visual tags for characters from the Danbooru API.
+
+**Enable this feature:**
+1. Edit `umi_settings.json`
+2. Set `"enable_danbooru_features": true`
+3. Restart ComfyUI
 
 ### Basic Usage
 ```text
@@ -741,7 +812,7 @@ char:tifa_lockhart
 // Fetches: black_hair, red_eyes, white_shirt, black_skirt, etc.
 ```
 
-### Settings
+### Settings (When Enabled)
 * **Danbooru Threshold**: Minimum tag score to include (higher = more relevant tags)
 * **Max Danbooru Tags**: Maximum number of tags to fetch per character
 
@@ -758,6 +829,8 @@ UmiAI automatically:
 $char={hatsune_miku|kagamine_rin|megurine_luka}
 A portrait of char:$char in __ArtStyle__ style, $pose
 ```
+
+**Note:** This is separate from the local tag autocomplete feature. Danbooru API integration fetches tags from the internet, while tag autocomplete uses local CSV files.
 
 ---
 
@@ -980,16 +1053,16 @@ in the style of __ArtistNames__, <lora:photorealistic_v2:0.7>
 
 ## 🔧 Node Settings Reference
 
-### Input Parameters
+### Input Parameters (Always Available)
 * **text** (required): Your main prompt with UmiAI syntax
 * **seed** (required): Random seed for reproducible results
 
-### Optional Connections
+### Optional Connections (Always Available)
 * **model**: Model input for LoRA patching (passthrough)
 * **clip**: CLIP input for LoRA patching (passthrough)
-* **image**: Image input for vision models
+* **image**: Image input for vision models (only when LLM features enabled)
 
-### LLM Settings
+### LLM Settings (Only when `enable_llm_features: true`)
 * **llm_model**: Select text model (Qwen/Dolphin) or "Download Recommended"
 * **llm_temperature**: Text generation creativity (default: 0.7)
 * **llm_max_tokens**: Maximum response length (default: 600)
@@ -997,20 +1070,20 @@ in the style of __ArtistNames__, <lora:photorealistic_v2:0.7>
 * **vision_model**: Select vision model (JoyCaption/LLava)
 * **vision_temperature**: Vision generation creativity (default: 0.5)
 * **vision_max_tokens**: Maximum vision response length
+* **auto_update_llama_cpp**: Auto-install llama-cpp-python
 
-### LoRA Settings
+### LoRA Settings (Always Available)
 * **lora_behavior**: Append/Prepend/Disabled (tag injection mode)
 * **lora_cache_limit**: Maximum cached LoRAs
 
-### Danbooru Settings
+### Danbooru Settings (Only when `enable_danbooru_features: true`)
 * **danbooru_threshold**: Minimum tag relevance score
 * **max_danbooru_tags**: Maximum tags to fetch per character
 
-### Other Settings
+### Other Settings (Always Available)
 * **resolution_control**: Enable/disable `@@width@@` syntax
-* **auto_update_llama_cpp**: Auto-install llama-cpp-python
 
-### Output Parameters
+### Output Parameters (Always Available)
 * **model**: Model with LoRAs applied
 * **clip**: CLIP with LoRAs applied
 * **text**: Processed positive prompt
@@ -1018,6 +1091,21 @@ in the style of __ArtistNames__, <lora:photorealistic_v2:0.7>
 * **width**: Extracted or default width
 * **height**: Extracted or default height
 * **lora_info**: Metadata from loaded LoRAs
+
+### Settings File Configuration (`umi_settings.json`)
+Edit this file to control which features are available:
+```json
+{
+  "use_folder_paths": false,         // Show wildcard folder paths
+  "csv_namespace": true,              // Add $csv_ variables
+  "yaml_namespace": true,             // Add $yaml_ variables
+  "rng_streams": false,               // Deterministic RNG per scope
+  "lint_cleaner_enabled": false,      // Show lint UI banner
+  "enable_llm_features": false,       // Enable LLM/Vision features
+  "enable_danbooru_features": false,  // Enable Danbooru API integration
+  "enable_tag_autocomplete": true     // Enable tag autocomplete from CSV files
+}
+```
 
 ---
 
@@ -1124,21 +1212,28 @@ Understanding the order of operations helps build complex prompts:
 ```
 ComfyUI-UmiAI/
 ├── __init__.py              # ComfyUI registration & API routes
-├── nodes.py                 # Main processing engine (1930 lines)
+├── nodes.py                 # Main processing engine
+├── nodes_lite.py            # Lite node implementation
+├── shared_utils.py          # Shared utilities
 ├── requirements.txt         # Python dependencies
-├── README.md               # This file
+├── umi_settings.json        # Feature toggle settings
+├── README.md                # This file
 ├── js/
-│   └── umi_wildcards.js    # Frontend autocomplete UI
-├── cache/                  # Cached Danbooru data
+│   ├── umi_wildcards.js     # Frontend autocomplete UI
+│   └── syntax_highlight.js  # Syntax highlighting
+├── autocomplete-tags/       # CSV files for tag autocomplete (optional)
+│   └── [your_tags.csv]      # Place Danbooru/E621 CSVs here
+├── cache/                   # Cached Danbooru data
 ├── sample workflow/
-│   └── UmiAI-Sample.json   # Example workflow
-└── wildcards/              # Your wildcard files
-    ├── globals.yaml        # Global variables
+│   └── UmiAI-Sample.json    # Example workflow
+└── wildcards/               # Your wildcard files
+    ├── globals.yaml         # Global variables
     └── [your files here]
 ```
 
 ### API Endpoints
-* `GET /umi/wildcards`: Returns all available wildcards, tags, and LoRAs (JSON)
+* `GET /umiapp/wildcards`: Returns all available wildcards, YAML tags, and LoRAs (JSON)
+* `GET /umiapp/autocomplete/tags?query=<search>&limit=50`: Returns filtered autocomplete tags from CSV files (JSON)
 
 ### Core Classes
 * `UmiAIWildcardNode`: Main ComfyUI node

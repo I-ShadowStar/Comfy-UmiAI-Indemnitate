@@ -1181,6 +1181,8 @@ app.registerExtension({
         this.wildcards = [];
         this.loras = [];
         this.globals = {};  // { $varname: "value" }
+        this.characters = [];  // Character names for __@ autocomplete
+        this.autocompleteTags = [];  // Tags from CSV files
 
         // Define a function we can call later to refresh the lists
         this.fetchWildcards = async () => {
@@ -1237,9 +1239,48 @@ app.registerExtension({
             }
         };
 
+        // Fetch characters for __@ autocomplete
+        this.fetchCharacters = async () => {
+            try {
+                const resp = await fetch("/umiapp/characters");
+                if (resp.ok) {
+                    const data = await resp.json();
+                    this.characters = data.characters || [];
+                    console.log(`[UmiAI] Loaded ${this.characters.length} characters for __@ autocomplete`);
+                }
+            } catch (e) {
+                console.error("[UmiAI] Failed to load characters:", e);
+                this.characters = [];
+            }
+        };
+
+        // Fetch autocomplete tags from CSV files (on-demand with query)
+        this.fetchAutocompleteTags = async (query = "") => {
+            try {
+                const resp = await fetch(`/umiapp/autocomplete/tags?query=${encodeURIComponent(query)}&limit=50`);
+                if (resp.ok) {
+                    const data = await resp.json();
+                    // Only return the filtered tags, don't store all tags in memory
+                    if (query) {
+                        return data.tags || [];
+                    } else {
+                        // Initial load - just log the total available
+                        console.log(`[UmiAI] Tag autocomplete initialized: ${data.total || 0} tags available`);
+                        return [];
+                    }
+                }
+                return [];
+            } catch (e) {
+                console.error("[UmiAI] Failed to load autocomplete tags:", e);
+                return [];
+            }
+        };
+
         // Initial fetch
         await this.fetchWildcards();
         await this.fetchGlobals();
+        await this.fetchCharacters();
+        await this.fetchAutocompleteTags();
         this.popup = new AutoCompletePopup();
     },
 
@@ -1316,9 +1357,14 @@ app.registerExtension({
             const inputEl = textWidget.inputEl;
             const ext = app.extensions.find(e => e.name === "UmiAI.WildcardSystem");
 
+            if (!ext) {
+                console.error("[UmiAI] Extension not found for autocomplete");
+                return;
+            }
+
             // 1. INTERCEPT NAVIGATION (Arrow Keys, Enter, Tab)
             inputEl.addEventListener("keydown", (e) => {
-                if (ext.popup.visible) {
+                if (ext && ext.popup && ext.popup.visible) {
                     if (e.key === "ArrowDown") {
                         e.preventDefault();
                         ext.popup.navigate(1); // Next
@@ -1342,21 +1388,26 @@ app.registerExtension({
             });
 
             // 2. LISTEN FOR TYPING (To show the popup)
-            inputEl.addEventListener("keyup", (e) => {
+            inputEl.addEventListener("keyup", async (e) => {
                 // Ignore nav keys in this listener to prevent flashing
                 if (["ArrowUp", "ArrowDown", "Enter", "Escape"].includes(e.key)) return;
+
+                if (!ext || !ext.popup) {
+                    console.warn("[UmiAI] Extension or popup not available");
+                    return;
+                }
 
                 const cursor = inputEl.selectionStart;
                 const text = inputEl.value;
                 const beforeCursor = text.substring(0, cursor);
 
-                // Regex for __ (wildcards - txt files)
+                // Regex for __@ (prompt files - full text file as prompt)
+                const matchPromptFile = beforeCursor.match(/__@([a-zA-Z0-9_\/\-\s]*)$/);
+                // Regex for __ (wildcards - txt files, picks random line)
                 const matchWildcard = beforeCursor.match(/__([a-zA-Z0-9_\/\-]*)$/);
                 // Regex for <[ (tags from yaml files)
                 const matchTag = beforeCursor.match(/<\[([a-zA-Z0-9_\/\-\s]*)$/);
                 const matchLora = beforeCursor.match(/<lora:([^>]*)$/);
-
-                if (!ext) return;
 
                 let options = [];
                 let triggerType = "";
@@ -1364,8 +1415,27 @@ app.registerExtension({
                 let query = "";
                 let opener = "";
 
+                // -- Prompt File Logic (__@ = full text files as prompts) --
+                if (matchPromptFile) {
+                    triggerType = "promptfile";
+                    opener = "__@";
+                    query = matchPromptFile[1];
+                    matchIndex = matchPromptFile.index;
+
+                    // Use wildcards list for __@ autocomplete (same txt files, but loads full content)
+                    const allWildcards = [...ext.wildcards];
+                    const basenameKeys = Object.keys(ext.basenames || {});
+
+                    basenameKeys.forEach(basename => {
+                        if (!allWildcards.includes(basename)) {
+                            allWildcards.push(basename);
+                        }
+                    });
+
+                    options = getFuzzyMatches(query, allWildcards);
+                }
                 // -- Wildcard Logic (__ = txt files only) --
-                if (matchWildcard) {
+                else if (matchWildcard) {
                     triggerType = "wildcard";
                     opener = "__";
                     query = matchWildcard[1];
@@ -1416,6 +1486,20 @@ app.registerExtension({
                         const varNames = Object.keys(ext.globals);
                         options = getFuzzyMatches(query, varNames.map(v => v.replace(/^\$/, '')));
                     }
+                    // -- Tag Autocomplete Logic (after comma or space) --
+                    else {
+                        // Match tags after comma or space, or at the start
+                        const matchGeneralTag = beforeCursor.match(/(?:^|,\s*|\s+)([a-zA-Z0-9_\-]{2,})$/);
+                        if (matchGeneralTag && matchGeneralTag[1].length >= 2) {
+                            triggerType = "generaltag";
+                            query = matchGeneralTag[1];
+                            matchIndex = matchGeneralTag.index + (beforeCursor.match(/(?:^|,\s*|\s+)/)[0].length);
+
+                            // Fetch tags on-demand from server
+                            const tags = await ext.fetchAutocompleteTags(query);
+                            options = tags || [];
+                        }
+                    }
                 }
 
                 if (triggerType && options.length > 0) {
@@ -1426,7 +1510,12 @@ app.registerExtension({
                         let completion = "";
 
                         // Smart Completion based on trigger type
-                        if (triggerType === "wildcard") {
+                        if (triggerType === "promptfile") {
+                            // Resolve basename to full path if needed
+                            const resolvedPath = ext.basenames?.[selected] || selected;
+                            completion = `__@${resolvedPath}__`;
+                        }
+                        else if (triggerType === "wildcard") {
                             // Resolve basename to full path if needed
                             const resolvedPath = ext.basenames?.[selected] || selected;
                             completion = `__${resolvedPath}__`;
@@ -1439,6 +1528,9 @@ app.registerExtension({
                         }
                         else if (triggerType === "variable") {
                             completion = `$${selected}`;
+                        }
+                        else if (triggerType === "generaltag") {
+                            completion = selected;
                         }
 
                         const prefix = text.substring(0, matchIndex);

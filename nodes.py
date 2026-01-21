@@ -687,6 +687,11 @@ class TagLoader(TagLoaderBase):
                             if isinstance(entry, dict):
                                 processed = self.process_yaml_entry('', entry)
                                 all_prompts.extend(processed['prompts'])
+                        GLOBAL_CACHE[requested_tag] = all_prompts
+                        FILE_MTIME_CACHE[requested_tag] = {
+                            'path': found_file,
+                            'mtime': os.path.getmtime(found_file)
+                        }
                         return all_prompts
 
                 except Exception as e:
@@ -1737,6 +1742,8 @@ class UmiAIWildcardNode:
                 "lora_tags_behavior": (["Append to Prompt", "Disabled", "Prepend to Prompt"], {"default": "Append to Prompt"}),
                 "lora_max_tags": ("INT", {"default": 5, "min": 0, "max": 20, "step": 1}),
                 "lora_cache_limit": ("INT", {"default": 5, "min": 0, "max": 50, "step": 1}),
+                "auto_clean": ("BOOLEAN", {"default": True, "tooltip": "Auto-clean prompt: remove extra commas/spaces, fix BREAK formatting"}),
+                "error_lint": ("BOOLEAN", {"default": False, "label_on": "Error Lint: ON", "label_off": "Error Lint: OFF", "tooltip": "Show detailed error messages (<<ERROR_...>>) instead of user-friendly warnings ([...])"}),
                 "use_folder_paths": ("BOOLEAN", {"default": False, "tooltip": "Show folder paths in wildcards: __Series/MyFile__ vs __MyFile__"}),
                 "width": ("INT", {"default": 1024, "min": 64, "max": 8192}),
                 "height": ("INT", {"default": 1024, "min": 64, "max": 8192}),
@@ -2056,24 +2063,52 @@ class UmiAIWildcardNode:
     # --- SAFETY HELPER ---
     def get_val(self, kwargs, key, default, value_type=None):
         val = kwargs.get(key, default)
-        
+
         if val is None:
             return default
 
         if value_type:
             try:
                 if value_type == int:
-                    return int(float(val)) 
+                    return int(float(val))
                 if value_type == float:
                     return float(val)
                 if value_type == str:
                     if isinstance(val, (int, float)):
-                        return str(val) 
+                        return str(val)
                     return str(val)
             except:
                 return default
-        
+
         return val
+
+    def clean_prompt(self, text):
+        """Clean prompt: remove extra commas/spaces, fix BREAK formatting.
+
+        - Removes multiple consecutive commas
+        - Removes extra spaces
+        - Removes commas before and after BREAK
+        - Ensures one space before and after BREAK
+        """
+        import re
+
+        if not text:
+            return ""
+
+        def _clean_segment(segment):
+            segment = re.sub(r'\s+', ' ', segment)
+            segment = re.sub(r'(?:\s*,\s*)+', ', ', segment)
+            segment = segment.strip(' ,')
+            segment = re.sub(r'\s+', ' ', segment).strip()
+            return segment
+
+        parts = re.split(r'\s*[,\.]*\s*\bBREAK\b\s*[,\.]*\s*', text, flags=re.IGNORECASE)
+        cleaned_parts = [p for p in (_clean_segment(part) for part in parts) if p]
+
+        if not cleaned_parts:
+            return ""
+
+        return " BREAK ".join(cleaned_parts)
 
     def process(self, **kwargs):
         # 1. AUTO-UPDATE CHECK (BUTTON LOGIC)
@@ -2099,6 +2134,8 @@ class UmiAIWildcardNode:
         lora_tags_behavior = self.get_val(kwargs, "lora_tags_behavior", "Append to Prompt", str)
         lora_max_tags = self.get_val(kwargs, "lora_max_tags", 5, int)
         lora_cache_limit = self.get_val(kwargs, "lora_cache_limit", 5, int)
+        auto_clean = kwargs.get("auto_clean", True) if "auto_clean" in kwargs else True
+        error_lint = kwargs.get("error_lint", False) if "error_lint" in kwargs else False
         use_folder_paths = kwargs.get("use_folder_paths", False)
         input_negative = self.get_val(kwargs, "input_negative", "", str)
 
@@ -2153,6 +2190,11 @@ class UmiAIWildcardNode:
 
         globals_dict = tag_loader.load_globals()
         variable_replacer.load_globals(globals_dict)
+
+        # Inject error_lint setting as failfast variable
+        if error_lint:
+            variable_replacer.variables['fail_fast'] = '1'
+            variable_replacer.variables['failfast'] = '1'
 
         prompt = text
         previous_prompt = ""
@@ -2217,8 +2259,13 @@ class UmiAIWildcardNode:
             neg_gen.add_list(tag_selector.scoped_negatives)
 
         prompt = neg_gen.strip_negative_tags(prompt)
-        prompt = re.sub(r',\s*,', ',', prompt)
-        prompt = re.sub(r'\s+', ' ', prompt).strip().strip(',')
+
+        # Cleanup (enhanced with BREAK handling if auto_clean enabled)
+        if auto_clean:
+            prompt = self.clean_prompt(prompt)
+        else:
+            prompt = re.sub(r',\s*,', ',', prompt)
+            prompt = re.sub(r'\s+', ' ', prompt).strip().strip(',')
 
         if tag_selector.is_trace_enabled():
             prompt = append_trace_summary(prompt, variable_replacer.variables)
@@ -4182,23 +4229,22 @@ async def scan_images(request):
         elif sort_by == "name":
             filtered_images.sort(key=lambda x: x["filename"])
 
-        # Facets
+        # Facets - build from filtered images (works with cached metadata too)
         model_counts = Counter()
         lora_counts = Counter()
         sampler_counts = Counter()
         tag_counts = Counter()
 
-        if not quick:
-            for img in filtered_images:
-                for model in img.get("derived", {}).get("models", []) or []:
-                    model_counts[model] += 1
-                for lora in img.get("derived", {}).get("loras", []) or []:
-                    lora_counts[lora] += 1
-                sampler = img.get("derived", {}).get("sampler")
-                if sampler:
-                    sampler_counts[sampler] += 1
-                for tag in img.get("annotations", {}).get("tags", []) or []:
-                    tag_counts[tag] += 1
+        for img in filtered_images:
+            for model in img.get("derived", {}).get("models", []) or []:
+                model_counts[model] += 1
+            for lora in img.get("derived", {}).get("loras", []) or []:
+                lora_counts[lora] += 1
+            sampler = img.get("derived", {}).get("sampler")
+            if sampler:
+                sampler_counts[sampler] += 1
+            for tag in img.get("annotations", {}).get("tags", []) or []:
+                tag_counts[tag] += 1
 
         facets = {
             "models": [{"name": k, "count": v} for k, v in model_counts.most_common()],
@@ -4596,3 +4642,76 @@ async def create_file(request):
     except Exception as e:
         print(f"[Umi File Editor] Error creating file: {e}")
         return web.json_response({"error": str(e)}, status=500)
+
+# Cache for autocomplete tags to avoid reloading on every request
+AUTOCOMPLETE_TAGS_CACHE = {"tags": None, "loaded": False}
+
+@server.PromptServer.instance.routes.get("/umiapp/autocomplete/tags")
+async def get_autocomplete_tags(request):
+    """Load autocomplete tags from CSV files in autocomplete-tags folder with query-based filtering"""
+    try:
+        # Check if tag autocomplete is enabled
+        if not UMI_SETTINGS.get('enable_tag_autocomplete', True):
+            return web.json_response({"tags": [], "count": 0, "total": 0, "disabled": True})
+
+        # Get query parameter for filtering
+        query = request.query.get("query", "").lower().strip()
+        limit = int(request.query.get("limit", 50))  # Limit results to 50 by default
+
+        # Load tags into cache if not already loaded
+        if not AUTOCOMPLETE_TAGS_CACHE["loaded"]:
+            custom_node_dir = os.path.dirname(os.path.abspath(__file__))
+            tags_folder = os.path.join(custom_node_dir, "autocomplete-tags")
+
+            if not os.path.exists(tags_folder):
+                print(f"[UmiAI] Autocomplete tags folder not found: {tags_folder}")
+                return web.json_response({"tags": [], "count": 0, "total": 0})
+
+            all_tags = set()  # Use set for faster lookups
+            total_loaded = 0
+
+            # Load all CSV files into cache
+            for filename in os.listdir(tags_folder):
+                if not filename.endswith('.csv'):
+                    continue
+
+                filepath = os.path.join(tags_folder, filename)
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        import csv
+                        reader = csv.reader(f)
+                        for row in reader:
+                            if row and row[0].strip():
+                                tag = row[0].strip()
+                                if tag:
+                                    all_tags.add(tag)
+                                    total_loaded += 1
+
+                    print(f"[UmiAI] Loaded tags from {filename}")
+
+                except Exception as e:
+                    print(f"[UmiAI] Error loading CSV {filename}: {e}")
+
+            # Convert to sorted list and cache
+            AUTOCOMPLETE_TAGS_CACHE["tags"] = sorted(list(all_tags))
+            AUTOCOMPLETE_TAGS_CACHE["loaded"] = True
+            print(f"[UmiAI] Tag autocomplete cache ready: {len(AUTOCOMPLETE_TAGS_CACHE['tags'])} unique tags")
+
+        # Filter tags based on query
+        cached_tags = AUTOCOMPLETE_TAGS_CACHE["tags"]
+        if query:
+            # Only return tags that start with or contain the query
+            matching_tags = [tag for tag in cached_tags if query in tag.lower()][:limit]
+        else:
+            # No query - return empty list (tags are loaded on-demand when user types)
+            matching_tags = []
+
+        return web.json_response({
+            "tags": matching_tags,
+            "count": len(matching_tags),
+            "total": len(cached_tags) if cached_tags else 0
+        })
+
+    except Exception as e:
+        print(f"[UmiAI] Error loading autocomplete tags: {e}")
+        return web.json_response({"tags": [], "count": 0, "total": 0, "error": str(e)}, status=500)

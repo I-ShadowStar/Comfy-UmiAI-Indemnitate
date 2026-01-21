@@ -57,10 +57,39 @@ async function fetchWildcardsForLinting() {
                 lintCleanerEnabled = data.lint_cleaner_enabled;
             }
             console.log(`[UmiAI Lint] Loaded ${knownWildcards.length} wildcards, ${knownLoras.length} loras. Linting: ${lintCleanerEnabled}`);
+
+            // Trigger refresh of all existing lint bars
+            updateAllLintBars();
+        }
+
+        // Also fetch characters and autocomplete tags for the autocomplete system
+        // This ensures they're loaded when the syntax highlighter refreshes
+        const ext = app?.extensions?.find(e => e.name === "UmiAI.WildcardSystem");
+        if (ext) {
+            if (ext.fetchCharacters) await ext.fetchCharacters();
+            if (ext.fetchAutocompleteTags) await ext.fetchAutocompleteTags();
         }
     } catch (e) {
         console.error("[UmiAI Lint] Failed to fetch wildcards:", e);
     }
+}
+
+// Update all existing lint bars to reflect current lintCleanerEnabled setting
+function updateAllLintBars() {
+    const allLintBars = document.querySelectorAll('.umi-lint-bar');
+    console.log(`[UmiAI Lint] Updating ${allLintBars.length} lint bars, enabled: ${lintCleanerEnabled}`);
+    allLintBars.forEach(lintBar => {
+        if (!lintCleanerEnabled) {
+            lintBar.style.display = 'none';
+            // Also hide error panels
+            const errorPanel = lintBar.parentElement?.querySelector('.umi-error-panel');
+            if (errorPanel) {
+                errorPanel.classList.remove('visible');
+            }
+        } else {
+            lintBar.style.display = '';
+        }
+    });
 }
 
 // Fetch wildcard preview for hover tooltip
@@ -886,7 +915,7 @@ function highlightSyntax(text, errors = []) {
 
 // Apply syntax highlighting to a textarea element
 // widget is the ComfyUI widget object for proper value updates
-function applyHighlighting(textareaEl, widget = null) {
+function applyHighlighting(textareaEl, widget = null, node = null, nodeLintEnabled = false) {
     if (!textareaEl) {
         console.log("[UmiAI Syntax] No textarea element provided");
         return null;
@@ -956,7 +985,10 @@ function applyHighlighting(textareaEl, widget = null) {
     // Apply transparent overlay style to textarea
     textareaEl.classList.add("umi-syntax-textarea");
 
-    if (lintCleanerEnabled) {
+    // Lint bar is shown if global setting is enabled AND node-level error_lint is enabled
+    const showLintBar = lintCleanerEnabled && nodeLintEnabled;
+
+    if (showLintBar) {
         // Add some bottom padding for the lint bar
         textareaEl.style.paddingBottom = "26px";
         backdrop.style.paddingBottom = "26px";
@@ -972,7 +1004,7 @@ function applyHighlighting(textareaEl, widget = null) {
 
         // Still insert backdrop for highlighting
         parent.insertBefore(backdrop, textareaEl);
-        
+
         // Hide UI elements if they exist
         lintBar.style.display = "none";
         errorPanel.style.display = "none";
@@ -1125,8 +1157,16 @@ function applyHighlighting(textareaEl, widget = null) {
     const syncHighlight = () => {
         let text = textareaEl.value;
 
+        // Get current node-level lint setting first for auto-clean check
+        let currentNodeLintEnabled = nodeLintEnabled;
+        if (node) {
+            const errorLintWidget = node.widgets?.find(w => w.name === "error_lint");
+            currentNodeLintEnabled = errorLintWidget ? errorLintWidget.value : false;
+        }
+        const currentShowLintBar = lintCleanerEnabled && currentNodeLintEnabled;
+
         // Apply auto-clean if enabled
-        if (autoCleanEnabled && lintCleanerEnabled) {
+        if (autoCleanEnabled && currentShowLintBar) {
             const cleaned = autoClean(text);
             if (cleaned !== text) {
                 const cursorPos = textareaEl.selectionStart;
@@ -1136,19 +1176,25 @@ function applyHighlighting(textareaEl, widget = null) {
             }
         }
 
-        const errors = lintCleanerEnabled ? lintPrompt(text) : [];
+        const errors = currentShowLintBar ? lintPrompt(text) : [];
         currentErrors = errors;
 
         // Update highlighting
         backdrop.innerHTML = highlightSyntax(text, errors);
 
         // Update lint bar text (not the whole bar, to preserve button)
-        if (!lintCleanerEnabled || errors.length === 0) {
+        if (!currentShowLintBar) {
+            // Hide lint bar completely when disabled
+            lintBar.style.display = 'none';
+            errorPanel.classList.remove('visible');
+        } else if (errors.length === 0) {
+            lintBar.style.display = '';
             lintBar.className = "umi-lint-bar umi-lint-bar-clean";
             lintText.innerHTML = '<span class="umi-lint-icon">✓</span> No issues';
             lintBar.title = "";
             errorPanel.classList.remove('visible');
         } else {
+            lintBar.style.display = '';
             lintBar.className = "umi-lint-bar umi-lint-bar-errors";
             const errorCount = errors.length;
 
@@ -1297,8 +1343,12 @@ app.registerExtension({
 
                 console.log("[UmiAI Syntax] Found text widget inputEl:", inputEl.tagName);
 
-                // Apply highlighting - pass widget for proper value updates
-                const result = applyHighlighting(inputEl, textWidget);
+                // Find error_lint widget to check if linting should be enabled for this node
+                const errorLintWidget = self.widgets?.find(w => w.name === "error_lint");
+                const nodeLintEnabled = errorLintWidget ? errorLintWidget.value : false;
+
+                // Apply highlighting - pass widget and node lint setting
+                const result = applyHighlighting(inputEl, textWidget, self, nodeLintEnabled);
                 if (result) {
                     self._syntaxHighlight = result;
                 }

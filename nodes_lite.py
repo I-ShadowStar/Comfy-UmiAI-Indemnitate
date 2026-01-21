@@ -1052,7 +1052,23 @@ class UmiAIWildcardNodeLite:
 
     @classmethod
     def INPUT_TYPES(s):
-        return {
+        # Check settings for conditional features
+        enable_llm = UMI_SETTINGS.get('enable_llm_features', False)
+        enable_danbooru = UMI_SETTINGS.get('enable_danbooru_features', False)
+
+        # Build LLM options if enabled
+        llm_options = ["None"]
+        if enable_llm:
+            from .nodes import DOWNLOADABLE_MODELS
+            llm_files = folder_paths.get_filename_list("llm") if "llm" in folder_paths.folder_names_and_paths else []
+            if not llm_files:
+                llm_path = os.path.join(folder_paths.models_dir, "llm")
+                if os.path.exists(llm_path):
+                    llm_files = [f for f in os.listdir(llm_path) if f.endswith('.gguf')]
+            download_options = list(DOWNLOADABLE_MODELS.keys())
+            llm_options = ["None"] + download_options + llm_files
+
+        inputs = {
             "required": {
                 "text": ("STRING", {"multiline": True, "dynamicPrompts": False}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
@@ -1066,12 +1082,31 @@ class UmiAIWildcardNodeLite:
                 "lora_tags_behavior": (["Append to Prompt", "Disabled", "Prepend to Prompt"], {"default": "Append to Prompt"}),
                 "lora_cache_limit": ("INT", {"default": 5, "min": 0, "max": 50, "step": 1}),
                 "auto_clean": ("BOOLEAN", {"default": True, "tooltip": "Auto-clean prompt: remove extra commas/spaces, fix BREAK formatting"}),
+                "error_lint": ("BOOLEAN", {"default": False, "label_on": "Error Lint: ON", "label_off": "Error Lint: OFF", "tooltip": "Show detailed error messages (<<ERROR_...>>) instead of user-friendly warnings ([...])"}),
                 "use_folder_paths": ("BOOLEAN", {"default": False, "tooltip": "Show folder paths in wildcards: __Series/MyFile__ vs __MyFile__"}),
                 "width": ("INT", {"default": 1024, "min": 64, "max": 8192}),
                 "height": ("INT", {"default": 1024, "min": 64, "max": 8192}),
                 "input_negative": ("STRING", {"multiline": True, "forceInput": True}),
             }
         }
+
+        # Add LLM/Vision features if enabled
+        if enable_llm:
+            inputs["optional"]["image"] = ("IMAGE",)
+            inputs["optional"]["update_llama_cpp"] = ("BOOLEAN", {"default": False, "label_on": "UPDATE & RESTART", "label_off": "Update Disabled"})
+            inputs["optional"]["vision_model"] = (llm_options, {"default": "None"})
+            inputs["optional"]["refiner_model"] = (llm_options, {"default": "None"})
+            inputs["optional"]["vision_temperature"] = ("FLOAT", {"default": 0.6, "min": 0.0, "max": 2.0, "step": 0.01})
+            inputs["optional"]["refiner_temperature"] = ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.01})
+            inputs["optional"]["max_tokens"] = ("INT", {"default": 800, "min": 100, "max": 4096})
+            inputs["optional"]["custom_system_prompt"] = ("STRING", {"multiline": True, "default": "", "placeholder": "Default: You are an AI image prompt assistant. Rewrite the following into detailed natural language."})
+
+        # Add Danbooru features if enabled
+        if enable_danbooru:
+            inputs["optional"]["danbooru_threshold"] = ("FLOAT", {"default": 0.70, "min": 0.1, "max": 1.0, "step": 0.05})
+            inputs["optional"]["danbooru_max_tags"] = ("INT", {"default": 15, "min": 1, "max": 50})
+
+        return inputs
 
     RETURN_TYPES = ("MODEL", "CLIP", "STRING", "STRING", "INT", "INT", "STRING", "STRING", "STRING")
     RETURN_NAMES = ("model", "clip", "text", "negative_text", "width", "height", "lora_info", "input_text", "input_negative")
@@ -1151,11 +1186,23 @@ class UmiAIWildcardNodeLite:
         return " BREAK ".join(cleaned_parts)
 
     def process(self, **kwargs):
+        # Check if auto-update was requested (LLM feature)
+        if UMI_SETTINGS.get('enable_llm_features', False):
+            do_update = kwargs.get("update_llama_cpp", False)
+            if do_update:
+                from .nodes import perform_library_update
+                success = perform_library_update()
+                if success:
+                    raise Exception("Auto-Update Complete! Please Restart ComfyUI now.")
+                else:
+                    raise Exception("Auto-Update Failed! Check console for errors.")
+
         text = self.get_val(kwargs, "text", "", str)
         seed = self.get_val(kwargs, "seed", 0, int)
 
         model = kwargs.get("model", None)
         clip = kwargs.get("clip", None)
+        image_input = kwargs.get("image", None) if UMI_SETTINGS.get('enable_llm_features', False) else None
 
         width = self.get_val(kwargs, "width", 1024, int)
         height = self.get_val(kwargs, "height", 1024, int)
@@ -1169,8 +1216,31 @@ class UmiAIWildcardNodeLite:
         lora_tags_behavior = self.get_val(kwargs, "lora_tags_behavior", "Append to Prompt", str)
         lora_cache_limit = self.get_val(kwargs, "lora_cache_limit", 5, int)
         auto_clean = kwargs.get("auto_clean", True) if "auto_clean" in kwargs else True
+        error_lint = kwargs.get("error_lint", False) if "error_lint" in kwargs else False
         use_folder_paths = kwargs.get("use_folder_paths", False) if "use_folder_paths" in kwargs else False
         input_negative = self.get_val(kwargs, "input_negative", "", str)
+
+        # LLM/Vision parameters (if enabled)
+        if UMI_SETTINGS.get('enable_llm_features', False):
+            vision_model = self.get_val(kwargs, "vision_model", "None", str)
+            refiner_model = self.get_val(kwargs, "refiner_model", "None", str)
+            vision_temperature = self.get_val(kwargs, "vision_temperature", 0.6, float)
+            refiner_temperature = self.get_val(kwargs, "refiner_temperature", 0.7, float)
+            max_tokens = self.get_val(kwargs, "max_tokens", 800, int)
+            custom_system_prompt = self.get_val(kwargs, "custom_system_prompt", "", str)
+        else:
+            vision_model = refiner_model = "None"
+            vision_temperature = refiner_temperature = 0.7
+            max_tokens = 800
+            custom_system_prompt = ""
+
+        # Danbooru parameters (if enabled)
+        if UMI_SETTINGS.get('enable_danbooru_features', False):
+            danbooru_threshold = self.get_val(kwargs, "danbooru_threshold", 0.70, float)
+            danbooru_max_tags = self.get_val(kwargs, "danbooru_max_tags", 15, int)
+        else:
+            danbooru_threshold = 0.70
+            danbooru_max_tags = 15
 
         # ============================================================
         # CORE PROCESSING
@@ -1203,9 +1273,29 @@ class UmiAIWildcardNodeLite:
         variable_replacer = VariableReplacer()
         lora_handler = LoRAHandler()
 
+        # Initialize optional replacers based on settings
+        if UMI_SETTINGS.get('enable_llm_features', False):
+            from .nodes import VisionReplacer, LLMReplacer
+            vision_replacer = VisionReplacer(self, vision_model, refiner_model, vision_temperature, refiner_temperature, max_tokens, image_input)
+            llm_replacer = LLMReplacer(self, refiner_model, refiner_temperature, max_tokens, custom_system_prompt)
+        else:
+            vision_replacer = None
+            llm_replacer = None
+
+        if UMI_SETTINGS.get('enable_danbooru_features', False):
+            from .nodes import DanbooruReplacer
+            danbooru_replacer = DanbooruReplacer(options)
+        else:
+            danbooru_replacer = None
+
         # Load globals
         globals_dict = tag_loader.load_globals()
         variable_replacer.load_globals(globals_dict)
+
+        # Inject error_lint setting as failfast variable
+        if error_lint:
+            variable_replacer.variables['fail_fast'] = '1'
+            variable_replacer.variables['failfast'] = '1'
 
         prompt = text
         previous_prompt = ""
@@ -1232,9 +1322,20 @@ class UmiAIWildcardNodeLite:
             prompt = variable_replacer.replace_variables(prompt)
 
             masked_prompt, if_blocks = conditional_replacer.mask_conditionals(prompt)
+
+            # Process Vision and LLM tags if enabled (skip conditional blocks)
+            if vision_replacer:
+                masked_prompt = vision_replacer.replace(masked_prompt)
+            if llm_replacer:
+                masked_prompt = llm_replacer.replace(masked_prompt)
+
             masked_prompt = CharacterReplacer.replace(masked_prompt)  # @@character:outfit:emotion@@
             masked_prompt = tag_replacer.replace(masked_prompt)
             masked_prompt = dynamic_replacer.replace(masked_prompt)
+
+            # Process Danbooru tags if enabled
+            if danbooru_replacer:
+                masked_prompt = danbooru_replacer.replace(masked_prompt, danbooru_threshold, danbooru_max_tags)
 
             prompt = conditional_replacer.unmask_conditionals(masked_prompt, if_blocks)
             prompt = conditional_replacer.replace(prompt, variable_replacer.variables)
@@ -1302,5 +1403,11 @@ class UmiAIWildcardNodeLite:
 
         return (final_model, final_clip, prompt, final_negative, final_width, final_height, lora_info, text, input_negative)
 
-NODE_CLASS_MAPPINGS = {"UmiAIWildcardNodeLite": UmiAIWildcardNodeLite}
-NODE_DISPLAY_NAME_MAPPINGS = {"UmiAIWildcardNodeLite": "UmiAI Wildcard Processor (Lite)"}
+NODE_CLASS_MAPPINGS = {
+    "UmiAIWildcardNodeLite": UmiAIWildcardNodeLite,
+    "UmiAIWildcardNode": UmiAIWildcardNodeLite  # Unified node - both names map to same class
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "UmiAIWildcardNodeLite": "UmiAI Wildcard Processor",
+    "UmiAIWildcardNode": "UmiAI Wildcard Processor"  # Same display name for both
+}
