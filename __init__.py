@@ -4,7 +4,7 @@ from .nodes import (UmiSaveImage,
                     # UmiEmotionStudio, UmiCharacterCreator as UmiCharacterCreator2,
                     # UmiSpriteGenerator as UmiSpriteGenerator2, UmiDatasetGenerator as UmiDatasetGenerator2,
                     # UmiPositionControl as UmiPositionControl2, UmiVisualCameraControl as UmiVisualCameraControl2,
-                    UMI_SETTINGS)
+                    UMI_SETTINGS, umi_debug_print)
 from .nodes_lite import UmiAIWildcardNodeLite  # Lite version (default for users)
 from .nodes_model_manager import UmiModelManager, UmiModelSelector
 from server import PromptServer
@@ -148,7 +148,7 @@ def get_wildcard_data():
                                 for t in entry['Tags']:
                                     tags.add(str(t).strip())
             except Exception as e:
-                print(f"[UmiAI] Error parsing YAML {filepath}: {e}")
+                umi_debug_print(f"[UmiAI] Error parsing YAML {filepath}: {e}")
 
     # Return separated data
     return {
@@ -259,7 +259,7 @@ async def get_loras(request):
                         "nsfw": raw_civitai_data.get("nsfw", "None")
                     }
             except Exception as e:
-                print(f"[Umi LoRA Browser] Error loading .civitai.info for {name}: {e}")
+                umi_debug_print(f"[Umi LoRA Browser] Error loading .civitai.info for {name}: {e}")
                 civitai_data = {}
                 civitai_info_tags = []
             
@@ -606,7 +606,7 @@ async def fetch_globals(request):
                         var_name = key if key.startswith('$') else f'${key}'
                         variables[var_name] = str(value)
         except Exception as e:
-            print(f"[UmiAI] Error loading globals.yaml: {e}")
+            umi_debug_print(f"[UmiAI] Error loading globals.yaml: {e}")
     
     # Also check models/wildcards for globals
     models_wildcards = os.path.join(folder_paths.models_dir, "wildcards")
@@ -622,7 +622,7 @@ async def fetch_globals(request):
                         if var_name not in variables:  # Don't override
                             variables[var_name] = str(value)
         except Exception as e:
-            print(f"[UmiAI] Error loading models globals.yaml: {e}")
+            umi_debug_print(f"[UmiAI] Error loading models globals.yaml: {e}")
     
     return web.json_response({
         "variables": variables,
@@ -1003,7 +1003,7 @@ async def update_settings(request):
         # nodes_lite imports UMI_SETTINGS from nodes, so it references the same dict
         # The .clear() and .update() above should propagate to nodes_lite automatically
 
-        print(f"[UmiAI] Settings reloaded: auto_clean={fresh_settings.get('auto_clean')}, error_lint={fresh_settings.get('error_lint')}")
+        umi_debug_print(f"[UmiAI] Settings reloaded: auto_clean={fresh_settings.get('auto_clean')}, error_lint={fresh_settings.get('error_lint')}")
 
         return web.json_response({
             "status": "success",
@@ -1288,7 +1288,7 @@ def worker_loop():
 
                 import shutil
                 shutil.move(temp_path, target_abs_path)
-                print(f"[UmiAI] Installed {model_name} -> {target_abs_path}")
+                umi_debug_print(f"[UmiAI] Installed {model_name} -> {target_abs_path}")
 
             update_installed_version(model_name, target_model.get("version", ""))
             download_status[model_name] = {"status": "success", "message": "Installed"}
@@ -1309,7 +1309,7 @@ def worker_loop():
                 err_msg = "File not found (404)"
 
             download_status[model_name] = {"status": status_code, "message": err_msg}
-            print(f"[UmiAI] Download failed for {model_name}: {err_msg}")
+            umi_debug_print(f"[UmiAI] Download failed for {model_name}: {err_msg}")
         finally:
             download_queue.task_done()
 

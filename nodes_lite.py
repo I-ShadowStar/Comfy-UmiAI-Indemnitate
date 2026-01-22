@@ -24,7 +24,7 @@ from .shared_utils import (
 )
 
 # Import UMI_SETTINGS from main nodes for syncing toggle
-from .nodes import UMI_SETTINGS
+from .nodes import UMI_SETTINGS, umi_debug_print
 
 # ==============================================================================
 # GLOBAL CACHE & SETUP (LITE VERSION - ISOLATED FROM FULL NODE)
@@ -82,7 +82,7 @@ class TagLoader(TagLoaderBase):
 
         # Rebuild if setting changed or first build
         if GLOBAL_INDEX_LITE['built'] and cached_setting != self.use_folder_paths:
-            print(f"[UmiAI Lite] Rebuilding index: use_folder_paths changed from {cached_setting} to {self.use_folder_paths}")
+            umi_debug_print(f"[UmiAI Lite] Rebuilding index: use_folder_paths changed from {cached_setting} to {self.use_folder_paths}")
             GLOBAL_INDEX_LITE['built'] = False  # Force rebuild
             full_rebuild = True
 
@@ -138,7 +138,7 @@ class TagLoader(TagLoaderBase):
                 else:
                     # File changed, remove old entries from index
                     if self.verbose:
-                        print(f"[UmiAI Lite] YAML file '{os.path.basename(file_path)}' modified, rescanning tags...")
+                        umi_debug_print(f"[UmiAI Lite] YAML file '{os.path.basename(file_path)}' modified, rescanning tags...")
                     # Remove old entries for this file from the global index
                     for tag_list in GLOBAL_INDEX_LITE['entries'].values():
                         tag_list[:] = [e for e in tag_list if e['file'] != file_path]
@@ -147,7 +147,7 @@ class TagLoader(TagLoaderBase):
                 data = yaml.safe_load(f)
 
             if not data or not isinstance(data, dict):
-                print(f"[UmiAI Lite DEBUG] Skipping {os.path.basename(file_path)}: not a dict")
+                umi_debug_print(f"[UmiAI Lite DEBUG] Skipping {os.path.basename(file_path)}: not a dict")
                 return
 
             tags_found = []
@@ -177,7 +177,7 @@ class TagLoader(TagLoaderBase):
             }
 
             if tags_found:
-                print(f"[UmiAI Lite DEBUG] Scanned {os.path.basename(file_path)}: found tags {tags_found[:10]}")
+                umi_debug_print(f"[UmiAI Lite DEBUG] Scanned {os.path.basename(file_path)}: found tags {tags_found[:10]}")
         except yaml.YAMLError as e:
             print(f"[UmiAI Lite] ERROR: Malformed YAML file '{os.path.basename(file_path)}': {e}")
             print(f"[UmiAI Lite] Skipping file. Please fix YAML syntax and refresh wildcards.")
@@ -565,12 +565,12 @@ class TagSelector(TagSelectorBase):
 
         # Debug logging - VERBOSE
         total_tags = len(GLOBAL_INDEX_LITE['entries'])
-        print(f"[UmiAI Lite DEBUG] select_by_tags('{logic_expression}'): {total_tags} tags indexed, GLOBAL_INDEX_LITE['built']={GLOBAL_INDEX_LITE['built']}")
-        print(f"[UmiAI Lite DEBUG] GLOBAL_INDEX_LITE id: {id(GLOBAL_INDEX_LITE)}, entries id: {id(GLOBAL_INDEX_LITE['entries'])}")
+        umi_debug_print(f"[UmiAI Lite DEBUG] select_by_tags('{logic_expression}'): {total_tags} tags indexed, GLOBAL_INDEX_LITE['built']={GLOBAL_INDEX_LITE['built']}")
+        umi_debug_print(f"[UmiAI Lite DEBUG] GLOBAL_INDEX_LITE id: {id(GLOBAL_INDEX_LITE)}, entries id: {id(GLOBAL_INDEX_LITE['entries'])}")
         if total_tags > 0:
-            print(f"[UmiAI Lite DEBUG] Available tags: {list(GLOBAL_INDEX_LITE['entries'].keys())[:20]}")
+            umi_debug_print(f"[UmiAI Lite DEBUG] Available tags: {list(GLOBAL_INDEX_LITE['entries'].keys())[:20]}")
         else:
-            print(f"[UmiAI Lite DEBUG] WARNING: entries dict is EMPTY! umi_tags has {len(GLOBAL_INDEX_LITE.get('tags', set()))} items")
+            umi_debug_print(f"[UmiAI Lite DEBUG] WARNING: entries dict is EMPTY! umi_tags has {len(GLOBAL_INDEX_LITE.get('tags', set()))} items")
         import sys
         sys.stdout.flush()
 
@@ -591,7 +591,7 @@ class TagSelector(TagSelectorBase):
                 # Debug: show first few evaluations
                 result = evaluator.evaluate(tag_dict)
                 if debug_count < 5:
-                    print(f"[UmiAI Lite DEBUG] Checking entry '{entry_info.get('entry_key', 'unknown')}': tag_dict={tag_dict}, expression='{logic_expression}', result={result}")
+                    umi_debug_print(f"[UmiAI Lite DEBUG] Checking entry '{entry_info.get('entry_key', 'unknown')}': tag_dict={tag_dict}, expression='{logic_expression}', result={result}")
                     debug_count += 1
                     
                 if result:
@@ -614,7 +614,7 @@ class TagSelector(TagSelectorBase):
         if not matching_entries:
             # Fix 11: Better error messages - show which logic expression failed to match
             error_msg = f"[NO_MATCHES: {logic_expression}]"
-            print(f"[UmiAI Lite DEBUG] Loop complete: checked {total_entries_checked} entries, found {len(matching_entries)} matches for '{logic_expression}'")
+            umi_debug_print(f"[UmiAI Lite DEBUG] Loop complete: checked {total_entries_checked} entries, found {len(matching_entries)} matches for '{logic_expression}'")
             print(f"[UmiAI Lite] WARNING: No YAML entries matched logic expression '{logic_expression}'.")
             sys.stdout.flush()
             if self.is_failfast_enabled():
@@ -1390,7 +1390,7 @@ class UmiAIWildcardNodeLite:
 
         # Warn if we hit the iteration limit
         if iterations >= 50:
-            print(f"[UmiAI Lite] WARNING: Reached maximum processing iterations (50). Possible recursive wildcards or variables.")
+            umi_debug_print(f"[UmiAI Lite] WARNING: Reached maximum processing iterations (50). Possible recursive wildcards or variables.")
 
         # Apply conditional logic (in case any remain after loop)
         prompt = conditional_replacer.replace(prompt, variable_replacer.variables)

@@ -8,6 +8,23 @@ class UmiSettingsDialog extends ComfyDialog {
         super();
         this.settings = {};
         this.element.classList.add("umi-settings-dialog");
+
+        // Inject CSS to fix double scrollbar issue
+        if (!document.getElementById('umi-settings-styles')) {
+            const style = document.createElement('style');
+            style.id = 'umi-settings-styles';
+            style.textContent = `
+                .umi-settings-dialog {
+                    overflow: visible !important;
+                }
+                .umi-settings-dialog .comfy-modal-content {
+                    overflow-y: auto !important;
+                    overflow-x: hidden !important;
+                    max-height: 80vh !important;
+                }
+            `;
+            document.head.appendChild(style);
+        }
     }
 
     async loadSettings() {
@@ -155,9 +172,9 @@ class UmiSettingsDialog extends ComfyDialog {
             title.style.cssText = "margin-top: 0; margin-bottom: 20px; color: #fff;";
             content.appendChild(title);
 
-            // Settings rows
+            // Settings rows - no max-height here since parent handles scrolling
             const settingsContainer = document.createElement("div");
-            settingsContainer.style.cssText = "max-height: 60vh; overflow-y: auto; margin-bottom: 20px;";
+            settingsContainer.style.cssText = "margin-bottom: 20px;";
 
             // Group settings by category
             const categories = {

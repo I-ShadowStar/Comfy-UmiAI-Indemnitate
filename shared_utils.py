@@ -28,6 +28,30 @@ GLOBAL_INDEX = {'built': False, 'files': set(), 'entries': {}, 'tags': set()}
 FILE_MTIME_CACHE = {}
 ALIAS_CACHE = {}
 
+# ==============================================================================
+# DEBUG PRINTING HELPER (loads settings lazily to avoid circular imports)
+# ==============================================================================
+_DEBUG_SETTINGS_CACHE = {'loaded': False, 'enabled': False}
+
+def _debug_print(*args, **kwargs):
+    """
+    Conditionally print debug messages based on enable_debug_output setting.
+    Lazily loads settings to avoid circular import issues.
+    """
+    if not _DEBUG_SETTINGS_CACHE['loaded']:
+        try:
+            settings_path = os.path.join(os.path.dirname(__file__), "umi_settings.json")
+            if os.path.exists(settings_path):
+                with open(settings_path, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    _DEBUG_SETTINGS_CACHE['enabled'] = settings.get('enable_debug_output', False)
+            _DEBUG_SETTINGS_CACHE['loaded'] = True
+        except Exception:
+            _DEBUG_SETTINGS_CACHE['loaded'] = True  # Mark as loaded even on error
+    
+    if _DEBUG_SETTINGS_CACHE['enabled']:
+        print(*args, **kwargs)
+
 
 def strip_prompt_comments(text):
     """
@@ -399,7 +423,7 @@ def log_prompt_to_history(prompt, negative="", seed=None):
             history = history[-100:]
             _atomic_write_json(history_file, history)
     except Exception as e:
-        print(f"[UmiAI] Warning: Could not log prompt to history: {e}")
+        _debug_print(f"[UmiAI] Warning: Could not log prompt to history: {e}")
 
 
 def parse_tag(tag):
@@ -505,7 +529,7 @@ def process_wildcard_range(tag, lines, rng):
             result.append(val)
         return ", ".join(result)
     except Exception as e:
-        print(f"Error processing wildcard range: {e}")
+        _debug_print(f"Error processing wildcard range: {e}")
         selected = rng.choice(lines)
         if isinstance(selected, dict):
             selected = selected.get('value', '')
@@ -1989,11 +2013,11 @@ class TagLoaderBase:
                         if isinstance(data, dict):
                             merged_globals.update({str(k): str(v) for k, v in data.items()})
                 except yaml.YAMLError as e:
-                    print(f"[UmiAI] ERROR: Malformed globals.yaml at {global_path}: {e}")
+                    _debug_print(f"[UmiAI] ERROR: Malformed globals.yaml at {global_path}: {e}")
                 except UnicodeDecodeError as e:
-                    print(f"[UmiAI] ERROR: Encoding issue in globals.yaml at {global_path}: {e}")
+                    _debug_print(f"[UmiAI] ERROR: Encoding issue in globals.yaml at {global_path}: {e}")
                 except Exception as e:
-                    print(f"[UmiAI] WARNING: Error loading globals.yaml at {global_path}: {e}")
+                    _debug_print(f"[UmiAI] WARNING: Error loading globals.yaml at {global_path}: {e}")
         return merged_globals
 
     def load_prompt_file(self, file_key):
@@ -2009,7 +2033,7 @@ class TagLoaderBase:
                         return strip_prompt_comments(f.read().strip())
                 except Exception as e:
                     if self.verbose:
-                        print(f"[UmiAI] Error reading prompt file {file_path}: {e}")
+                        _debug_print(f"[UmiAI] Error reading prompt file {file_path}: {e}")
         return None
 
     def process_yaml_entry(self, title, entry_data):

@@ -8,6 +8,9 @@ try:
 except Exception:
     HF_HUB_AVAILABLE = False
 
+# Import debug print helper
+from .nodes import umi_debug_print
+
 
 class AnyType(str):
     def __ne__(self, __value: object) -> bool:
@@ -75,7 +78,7 @@ class UmiModelSelector:
 
     def get_path(self, repo_id, model_name="", version="auto"):
         if not HF_HUB_AVAILABLE:
-            print("[UmiAI] ModelSelector Error: huggingface_hub is not installed.")
+            umi_debug_print("[UmiAI] ModelSelector Error: huggingface_hub is not installed.")
             return ("",)
 
         try:
@@ -144,14 +147,14 @@ class UmiModelSelector:
                         break
 
                 relative_path = relative_path.replace("\\", "/")
-                print(f"[UmiAI] ModelSelector Result: {relative_path}")
+                umi_debug_print(f"[UmiAI] ModelSelector Result: {relative_path}")
                 return (relative_path,)
 
-            print(f"[UmiAI] ModelSelector: Model '{model_name}' not found.")
+            umi_debug_print(f"[UmiAI] ModelSelector: Model '{model_name}' not found.")
             return ("",)
 
         except Exception as e:
-            print(f"[UmiAI] ModelSelector Error: {e}")
+            umi_debug_print(f"[UmiAI] ModelSelector Error: {e}")
             return ("",)
 
 

@@ -12,7 +12,7 @@ class AutoCompletePopup {
             display: "none",
             backgroundColor: "#1e1e1e",
             border: "1px solid #61afef",
-            zIndex: "9999",
+            zIndex: "10001",
             maxHeight: "250px",
             overflowY: "auto",
             color: "#e0e0e0",
@@ -28,6 +28,7 @@ class AutoCompletePopup {
         this.items = [];
         this.selectedIndex = 0;
         this.onSelectCallback = null;
+        this.listItems = []; // Store references to list item elements
     }
 
     show(x, y, options, onSelect) {
@@ -46,10 +47,47 @@ class AutoCompletePopup {
         this.element.style.display = "none";
         this.visible = false;
         this.items = [];
+        this.listItems = [];
+    }
+
+    // Update visual styles without rebuilding DOM
+    updateSelection(newIndex) {
+        const oldIndex = this.selectedIndex;
+        this.selectedIndex = newIndex;
+
+        // Update old item styles
+        if (this.listItems[oldIndex]) {
+            this.listItems[oldIndex].style.backgroundColor = "transparent";
+            this.listItems[oldIndex].style.color = "#e0e0e0";
+            this.listItems[oldIndex].style.borderLeft = "3px solid transparent";
+        }
+
+        // Update new item styles
+        if (this.listItems[newIndex]) {
+            this.listItems[newIndex].style.backgroundColor = "#2d4f6c";
+            this.listItems[newIndex].style.color = "#fff";
+            this.listItems[newIndex].style.borderLeft = "3px solid #61afef";
+        }
+
+        // Auto-scroll to selected item
+        this.scrollToSelected();
+    }
+
+    scrollToSelected() {
+        // +1 because first child is the header
+        const activeEl = this.element.children[this.selectedIndex + 1];
+        if (activeEl) {
+            if (activeEl.offsetTop < this.element.scrollTop) {
+                this.element.scrollTop = activeEl.offsetTop;
+            } else if (activeEl.offsetTop + activeEl.offsetHeight > this.element.scrollTop + this.element.offsetHeight) {
+                this.element.scrollTop = activeEl.offsetTop + activeEl.offsetHeight - this.element.offsetHeight;
+            }
+        }
     }
 
     render() {
         this.element.innerHTML = "";
+        this.listItems = [];
 
         // Header
         const header = document.createElement("div");
@@ -82,38 +120,36 @@ class AutoCompletePopup {
             }
 
             div.onmouseover = () => {
-                this.selectedIndex = index;
-                this.render();
+                // Update selection WITHOUT re-rendering entire DOM
+                if (this.selectedIndex !== index) {
+                    this.updateSelection(index);
+                }
             };
 
             div.onmousedown = (e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 this.triggerSelection();
             };
 
             this.element.appendChild(div);
+            this.listItems.push(div); // Store reference
         });
 
         // Auto-Scroll
-        if (this.element.children[this.selectedIndex + 1]) {
-            const activeEl = this.element.children[this.selectedIndex + 1];
-            if (activeEl.offsetTop < this.element.scrollTop) {
-                this.element.scrollTop = activeEl.offsetTop;
-            } else if (activeEl.offsetTop + activeEl.offsetHeight > this.element.scrollTop + this.element.offsetHeight) {
-                this.element.scrollTop = activeEl.offsetTop + activeEl.offsetHeight - this.element.offsetHeight;
-            }
-        }
+        this.scrollToSelected();
     }
 
     navigate(direction) {
         if (!this.visible) return;
         const max = Math.min(this.items.length, 50) - 1;
+        let newIndex;
         if (direction === 1) {
-            this.selectedIndex = this.selectedIndex >= max ? 0 : this.selectedIndex + 1;
+            newIndex = this.selectedIndex >= max ? 0 : this.selectedIndex + 1;
         } else {
-            this.selectedIndex = this.selectedIndex <= 0 ? max : this.selectedIndex - 1;
+            newIndex = this.selectedIndex <= 0 ? max : this.selectedIndex - 1;
         }
-        this.render();
+        this.updateSelection(newIndex);
     }
 
     triggerSelection() {

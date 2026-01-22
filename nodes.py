@@ -427,7 +427,7 @@ def process_wildcard_range(tag, lines, rng):
         selected = [line.split('#')[0].strip() if '#' in line else line for line in selected]
         return ", ".join(selected)
     except Exception as e:
-        print(f"Error processing wildcard range: {e}")
+        umi_debug_print(f"Error processing wildcard range: {e}")
         selected = rng.choice(lines)
         if '#' in selected:
             selected = selected.split('#')[0].strip()
@@ -709,7 +709,7 @@ class TagLoader(TagLoaderBase):
                         return all_prompts
 
                 except Exception as e:
-                    if verbose: print(f'Error parsing YAML {found_file}: {e}')
+                    if verbose: umi_debug_print(f'Error parsing YAML {found_file}: {e}')
 
         return []
 
@@ -2362,18 +2362,18 @@ class UmiSaveImage:
             # Add Umi-specific metadata (processed prompts)
             if positive_prompt:
                 metadata.add_text("umi_prompt", positive_prompt)
-                print(f"[UmiSaveImage] Saved umi_prompt: {positive_prompt[:100]}...")
+                umi_debug_print(f"[UmiSaveImage] Saved umi_prompt: {positive_prompt[:100]}...")
             if negative_prompt:
                 metadata.add_text("umi_negative", negative_prompt)
-                print(f"[UmiSaveImage] Saved umi_negative: {negative_prompt[:100]}...")
+                umi_debug_print(f"[UmiSaveImage] Saved umi_negative: {negative_prompt[:100]}...")
 
             # Add original input prompts (before wildcard processing)
             if input_prompt:
                 metadata.add_text("umi_input_prompt", input_prompt)
-                print(f"[UmiSaveImage] Saved umi_input_prompt: {input_prompt[:100]}...")
+                umi_debug_print(f"[UmiSaveImage] Saved umi_input_prompt: {input_prompt[:100]}...")
             if input_negative:
                 metadata.add_text("umi_input_negative", input_negative)
-                print(f"[UmiSaveImage] Saved umi_input_negative: {input_negative[:100]}...")
+                umi_debug_print(f"[UmiSaveImage] Saved umi_input_negative: {input_negative[:100]}...")
 
             # Add standard ComfyUI workflow metadata if available
             if prompt is not None:
