@@ -62,20 +62,39 @@ class TagLoader(TagLoaderBase):
     def build_index(self):
         # Check if cache was built with a different use_folder_paths setting
         cached_setting = GLOBAL_INDEX_LITE.get('use_folder_paths', None)
+        full_rebuild = False
+
         if GLOBAL_INDEX_LITE['built'] and cached_setting == self.use_folder_paths:
+            # Cache exists and setting matches, but we still need to scan YAML files
+            # for potential modifications (scan_yaml_for_tags handles mtime checking)
             self.files_index = GLOBAL_INDEX_LITE['files']
             self.umi_tags = GLOBAL_INDEX_LITE['tags']
+            # Rescan YAML files to check for modifications
+            for wildcard_path in self.wildcard_paths:
+                if not os.path.exists(wildcard_path):
+                    continue
+                for root, dirs, files in os.walk(wildcard_path):
+                    for file in files:
+                        if file.endswith(('.yaml', '.yml')):
+                            full_path = os.path.join(root, file)
+                            self.scan_yaml_for_tags(full_path)
             return
-        
+
         # Rebuild if setting changed or first build
         if GLOBAL_INDEX_LITE['built'] and cached_setting != self.use_folder_paths:
             print(f"[UmiAI Lite] Rebuilding index: use_folder_paths changed from {cached_setting} to {self.use_folder_paths}")
             GLOBAL_INDEX_LITE['built'] = False  # Force rebuild
-        
+            full_rebuild = True
+
         # Reset for fresh build
         self.files_index = set()
         self.umi_tags = set()
-        GLOBAL_INDEX_LITE['entries'] = {}
+        if full_rebuild:
+            GLOBAL_INDEX_LITE['entries'] = {}
+            # Clear YAML mtime cache on full rebuild
+            yaml_keys = [k for k in FILE_MTIME_CACHE_LITE.keys() if k.startswith('yaml_tags_')]
+            for k in yaml_keys:
+                del FILE_MTIME_CACHE_LITE[k]
 
         for wildcard_path in self.wildcard_paths:
             if not os.path.exists(wildcard_path):
@@ -93,7 +112,7 @@ class TagLoader(TagLoaderBase):
                         else:
                             # Filename only mode: __A Centaur's Life__
                             key = os.path.splitext(file)[0]
-                        
+
                         self.files_index.add(key)
 
                         if file.endswith(('.yaml', '.yml')):
@@ -106,6 +125,24 @@ class TagLoader(TagLoaderBase):
 
     def scan_yaml_for_tags(self, file_path):
         try:
+            # Track modification time for this YAML file
+            current_mtime = os.path.getmtime(file_path)
+            yaml_cache_key = f"yaml_tags_{file_path}"
+
+            # Check if we've already scanned this file with the same mtime
+            if yaml_cache_key in FILE_MTIME_CACHE_LITE:
+                cached_mtime = FILE_MTIME_CACHE_LITE[yaml_cache_key].get('mtime', 0)
+                if current_mtime == cached_mtime:
+                    # File hasn't changed, skip re-scanning
+                    return
+                else:
+                    # File changed, remove old entries from index
+                    if self.verbose:
+                        print(f"[UmiAI Lite] YAML file '{os.path.basename(file_path)}' modified, rescanning tags...")
+                    # Remove old entries for this file from the global index
+                    for tag_list in GLOBAL_INDEX_LITE['entries'].values():
+                        tag_list[:] = [e for e in tag_list if e['file'] != file_path]
+
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
 
@@ -132,6 +169,12 @@ class TagLoader(TagLoaderBase):
                             'entry_key': entry_key,
                             'data': entry_data
                         })
+
+            # Cache the modification time so we don't rescan unchanged files
+            FILE_MTIME_CACHE_LITE[yaml_cache_key] = {
+                'path': file_path,
+                'mtime': current_mtime
+            }
 
             if tags_found:
                 print(f"[UmiAI Lite DEBUG] Scanned {os.path.basename(file_path)}: found tags {tags_found[:10]}")
@@ -1081,9 +1124,6 @@ class UmiAIWildcardNodeLite:
                 # Basic Settings
                 "lora_tags_behavior": (["Append to Prompt", "Disabled", "Prepend to Prompt"], {"default": "Append to Prompt"}),
                 "lora_cache_limit": ("INT", {"default": 5, "min": 0, "max": 50, "step": 1}),
-                "auto_clean": ("BOOLEAN", {"default": True, "tooltip": "Auto-clean prompt: remove extra commas/spaces, fix BREAK formatting"}),
-                "error_lint": ("BOOLEAN", {"default": False, "label_on": "Error Lint: ON", "label_off": "Error Lint: OFF", "tooltip": "Show detailed error messages (<<ERROR_...>>) instead of user-friendly warnings ([...])"}),
-                "use_folder_paths": ("BOOLEAN", {"default": False, "tooltip": "Show folder paths in wildcards: __Series/MyFile__ vs __MyFile__"}),
                 "width": ("INT", {"default": 1024, "min": 64, "max": 8192}),
                 "height": ("INT", {"default": 1024, "min": 64, "max": 8192}),
                 "input_negative": ("STRING", {"multiline": True, "forceInput": True}),
@@ -1215,10 +1255,15 @@ class UmiAIWildcardNodeLite:
 
         lora_tags_behavior = self.get_val(kwargs, "lora_tags_behavior", "Append to Prompt", str)
         lora_cache_limit = self.get_val(kwargs, "lora_cache_limit", 5, int)
-        auto_clean = kwargs.get("auto_clean", True) if "auto_clean" in kwargs else True
-        error_lint = kwargs.get("error_lint", False) if "error_lint" in kwargs else False
-        use_folder_paths = kwargs.get("use_folder_paths", False) if "use_folder_paths" in kwargs else False
+        auto_clean = UMI_SETTINGS.get('auto_clean', True)
+        error_lint = UMI_SETTINGS.get('error_lint', False)
+        use_folder_paths = UMI_SETTINGS.get('use_folder_paths', False)
         input_negative = self.get_val(kwargs, "input_negative", "", str)
+
+        # Debug: Show what settings are being read
+        if UMI_SETTINGS.get('enable_debug_output', False):
+            from .nodes import umi_debug_print
+            umi_debug_print(f"[UmiAI Lite] Processing with: auto_clean={auto_clean}, error_lint={error_lint}")
 
         # LLM/Vision parameters (if enabled)
         if UMI_SETTINGS.get('enable_llm_features', False):
@@ -1255,11 +1300,6 @@ class UmiAIWildcardNodeLite:
             'use_folder_paths': use_folder_paths,
             'rng_streams': UMI_SETTINGS.get('rng_streams', False),
         }
-        
-        # Sync node toggle to global settings so autocomplete uses same setting
-        if UMI_SETTINGS.get('use_folder_paths', False) != use_folder_paths:
-            UMI_SETTINGS['use_folder_paths'] = use_folder_paths
-            print(f"[UmiAI Lite] Updated global use_folder_paths to: {use_folder_paths}")
 
         all_wildcard_paths = get_all_wildcard_paths()
         tag_loader = TagLoader(all_wildcard_paths, options)
@@ -1292,10 +1332,12 @@ class UmiAIWildcardNodeLite:
         globals_dict = tag_loader.load_globals()
         variable_replacer.load_globals(globals_dict)
 
-        # Inject error_lint setting as failfast variable
+        # Inject error_lint setting as failfast variable in both variable_replacer and tag_selector
         if error_lint:
             variable_replacer.variables['fail_fast'] = '1'
             variable_replacer.variables['failfast'] = '1'
+            tag_selector.variables['fail_fast'] = '1'
+            tag_selector.variables['failfast'] = '1'
 
         prompt = text
         previous_prompt = ""

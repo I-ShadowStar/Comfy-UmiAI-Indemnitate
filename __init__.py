@@ -1,10 +1,11 @@
 from .nodes import (UmiSaveImage,
+                    # UmiAIWildcardNode,  # Full version - uncomment for debugging
                     # UmiPoseGenerator, UmiEmotionGenerator,
                     # UmiEmotionStudio, UmiCharacterCreator as UmiCharacterCreator2,
                     # UmiSpriteGenerator as UmiSpriteGenerator2, UmiDatasetGenerator as UmiDatasetGenerator2,
                     # UmiPositionControl as UmiPositionControl2, UmiVisualCameraControl as UmiVisualCameraControl2,
                     UMI_SETTINGS)
-from .nodes_lite import UmiAIWildcardNodeLite
+from .nodes_lite import UmiAIWildcardNodeLite  # Lite version (default for users)
 from .nodes_model_manager import UmiModelManager, UmiModelSelector
 from server import PromptServer
 from aiohttp import web
@@ -943,6 +944,127 @@ async def refresh_wildcards(request):
     })
 
 # ==============================================================================
+# SETTINGS MANAGEMENT API
+# ==============================================================================
+
+@PromptServer.instance.routes.get("/umiapp/settings")
+async def get_settings(request):
+    """Get current UmiAI settings."""
+    return web.json_response({"settings": UMI_SETTINGS})
+
+@PromptServer.instance.routes.post("/umiapp/settings/update")
+async def update_settings(request):
+    """Update UmiAI settings and reload nodes."""
+    try:
+        data = await request.json()
+        new_settings = data.get("settings", {})
+
+        # Read current settings file
+        settings_path = os.path.join(os.path.dirname(__file__), "umi_settings.json")
+
+        # Load existing settings (preserving comments)
+        existing_content = ""
+        if os.path.exists(settings_path):
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                existing_content = f.read()
+
+        # Parse existing JSON to update values
+        try:
+            # Load without comments for parsing
+            import re
+            json_without_comments = re.sub(r'//.*?$', '', existing_content, flags=re.MULTILINE)
+            current_settings = json.loads(json_without_comments)
+        except:
+            current_settings = {}
+
+        # Update with new values
+        current_settings.update(new_settings)
+
+        # Write back to file with pretty formatting
+        with open(settings_path, 'w', encoding='utf-8') as f:
+            json.dump(current_settings, f, indent=4)
+
+        # Reload settings in memory
+        from .nodes import load_umi_settings
+
+        # Load fresh settings from file
+        fresh_settings = load_umi_settings()
+
+        # Update all references to UMI_SETTINGS dictionary
+        global UMI_SETTINGS
+        UMI_SETTINGS.clear()
+        UMI_SETTINGS.update(fresh_settings)
+
+        # Also update in nodes module (same dictionary object)
+        from . import nodes
+        nodes.UMI_SETTINGS.clear()
+        nodes.UMI_SETTINGS.update(fresh_settings)
+
+        # nodes_lite imports UMI_SETTINGS from nodes, so it references the same dict
+        # The .clear() and .update() above should propagate to nodes_lite automatically
+
+        print(f"[UmiAI] Settings reloaded: auto_clean={fresh_settings.get('auto_clean')}, error_lint={fresh_settings.get('error_lint')}")
+
+        return web.json_response({
+            "status": "success",
+            "message": "Settings updated successfully. Changes will take effect immediately.",
+            "settings": UMI_SETTINGS
+        })
+
+    except Exception as e:
+        return web.json_response({
+            "status": "error",
+            "message": str(e)
+        }, status=500)
+
+@PromptServer.instance.routes.post("/umiapp/settings/reset")
+async def reset_settings(request):
+    """Reset settings to defaults."""
+    try:
+        # Get default settings
+        from .nodes import load_umi_settings
+
+        defaults = {
+            'use_folder_paths': False,
+            'csv_namespace': True,
+            'yaml_namespace': True,
+            'rng_streams': False,
+            'auto_clean': True,
+            'error_lint': False,
+            'lint_cleaner_enabled': True,
+            'enable_llm_features': False,
+            'enable_danbooru_features': False,
+            'enable_tag_autocomplete': True,
+            'enable_debug_output': False,
+        }
+
+        # Write defaults to file
+        settings_path = os.path.join(os.path.dirname(__file__), "umi_settings.json")
+        with open(settings_path, 'w', encoding='utf-8') as f:
+            json.dump(defaults, f, indent=4)
+
+        # Reload settings
+        global UMI_SETTINGS
+        UMI_SETTINGS.clear()
+        UMI_SETTINGS.update(load_umi_settings())
+
+        from . import nodes
+        nodes.UMI_SETTINGS.clear()
+        nodes.UMI_SETTINGS.update(load_umi_settings())
+
+        return web.json_response({
+            "status": "success",
+            "message": "Settings reset to defaults",
+            "settings": UMI_SETTINGS
+        })
+
+    except Exception as e:
+        return web.json_response({
+            "status": "error",
+            "message": str(e)
+        }, status=500)
+
+# ==============================================================================
 # MODEL DOWNLOADER API (VNCCS-STYLE REPO SUPPORT)
 # ==============================================================================
 
@@ -1379,8 +1501,9 @@ async def get_download_progress(request):
 
 # 2. Mappings
 CORE_NODE_CLASS_MAPPINGS = {
-    "UmiAIWildcardNode": UmiAIWildcardNodeLite,  # Unified node - both names map to same class
-    "UmiAIWildcardNodeLite": UmiAIWildcardNodeLite,  # Unified node - both names map to same class
+    "UmiAIWildcardNode": UmiAIWildcardNodeLite,  # Unified node (Lite version for users)
+    # Full version available in nodes.py for debugging - uncomment to use instead of Lite:
+    # "UmiAIWildcardNode": UmiAIWildcardNode,
     "UmiSaveImage": UmiSaveImage,
     # Disabled nodes - uncomment to re-enable
     # "UmiPoseGenerator": UmiPoseGenerator,
@@ -1393,7 +1516,6 @@ CORE_NODE_CLASS_MAPPINGS = {
 
 CORE_NODE_DISPLAY_NAME_MAPPINGS = {
     "UmiAIWildcardNode": "UmiAI Wildcard Processor",
-    "UmiAIWildcardNodeLite": "UmiAI Wildcard Processor",  # Unified - same display name
     "UmiSaveImage": "Umi Save Image (with metadata)",
     # Disabled nodes - uncomment to re-enable
     # "UmiPoseGenerator": "Umi Pose Generator",

@@ -99,15 +99,23 @@ UmiAI transforms static prompts into dynamic, context-aware workflows. It introd
 * **🔁 Recursive Processing:** Iterative prompt refinement with cycle detection (max 50 passes).
 * **🎯 Seeded Determinism:** Reproducible random selections via seed control for consistent results.
 * **🧭 RNG Streams:** Optional deterministic sub-streams per tag/scope (toggle `rng_streams`, use `$rng_scope` to group or `__@scope:tag__` per pick).
-* **⚙️ Settings File:** Configure behavior via `umi_settings.json`:
+* **⚙️ Settings Manager:** Access settings via multiple locations:
+  - **Sidebar Control Panel:** Click the UmiAI icon in ComfyUI's sidebar to open the Umi Control Panel, then click "⚙ Settings"
+  - **Menu Button:** Click "⚙ UmiAI Settings" in ComfyUI's top menu bar
+  - **Manual Edit:** Edit `umi_settings.json` directly in the custom node folder
+  
+  Available settings (all controlled globally, no per-node widgets):
   - `use_folder_paths`: Show wildcards as `__Series/MyFile__` instead of `__MyFile__`
   - `csv_namespace`: Add `$csv_` prefixed variables for CSV columns
   - `yaml_namespace`: Add `$yaml_` prefixed variables for YAML entries
   - `rng_streams`: Use deterministic RNG streams per scope/tag
-  - `lint_cleaner_enabled`: Enable/disable prompt linting UI banner
+  - `auto_clean`: Auto-clean output prompts (remove extra commas/spaces, fix BREAK formatting)
+  - `error_lint`: Show detailed error messages (`<<ERROR_...>>`) instead of user-friendly warnings (`[...]`)
+  - `lint_cleaner_enabled`: Enable/disable the prompt linting UI bar at bottom of text widget (disabled by default)
   - `enable_llm_features`: Enable LLM/Vision features (adds image input, vision_model, refiner_model, temperatures, max_tokens, custom_system_prompt, update_llama_cpp button)
   - `enable_danbooru_features`: Enable Danbooru API integration (adds danbooru_threshold, danbooru_max_tags parameters)
   - `enable_tag_autocomplete`: Enable tag autocomplete from CSV files (default: true)
+  - `enable_debug_output`: Enable/disable console debug output (warnings, errors, processing info) (default: false)
 * **🧷 Aliases:** Add `aliases.yaml` in any wildcards folder to map wildcard/LoRA aliases.
 
 ---
@@ -1092,18 +1100,29 @@ in the style of __ArtistNames__, <lora:photorealistic_v2:0.7>
 * **height**: Extracted or default height
 * **lora_info**: Metadata from loaded LoRAs
 
-### Settings File Configuration (`umi_settings.json`)
-Edit this file to control which features are available:
+### Settings Manager
+
+Access settings via multiple locations:
+- **Sidebar Control Panel:** Click the UmiAI icon in ComfyUI's sidebar, then click "⚙ Settings"
+- **Menu Button:** Click **"⚙ UmiAI Settings"** in ComfyUI's menu bar
+- **Manual Edit:** Edit `umi_settings.json` directly
+
+All settings are controlled globally (no per-node widgets). Changes take effect immediately without restarting.
+
+Example `umi_settings.json`:
 ```json
 {
   "use_folder_paths": false,         // Show wildcard folder paths
   "csv_namespace": true,              // Add $csv_ variables
   "yaml_namespace": true,             // Add $yaml_ variables
   "rng_streams": false,               // Deterministic RNG per scope
+  "auto_clean": true,                 // Auto-clean prompts (remove extra commas/spaces)
+  "error_lint": false,                // Show detailed error messages vs warnings
   "lint_cleaner_enabled": false,      // Show lint UI banner
   "enable_llm_features": false,       // Enable LLM/Vision features
   "enable_danbooru_features": false,  // Enable Danbooru API integration
-  "enable_tag_autocomplete": true     // Enable tag autocomplete from CSV files
+  "enable_tag_autocomplete": true,    // Enable tag autocomplete from CSV files
+  "enable_debug_output": false        // Enable debug output in console
 }
 ```
 

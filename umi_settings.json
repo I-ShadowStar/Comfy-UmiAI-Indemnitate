@@ -1,24 +1,13 @@
 {
-    // Show wildcards as __Series/MyFile__ instead of __MyFile__
     "use_folder_paths": false,
-    // Add $csv_ prefixed variables for CSV columns during processing
     "csv_namespace": true,
-    // Add $yaml_ prefixed variables for YAML entries during processing
     "yaml_namespace": true,
-    // Use deterministic RNG streams per scope/tag for reproducible results
     "rng_streams": false,
-    // Enable or disable the prompt linting and cleaning UI banner in UmiAI nodes
-    "lint_cleaner_enabled": false,
-
-    // Enable LLM/Vision features (vision models, refiner, image input, auto-updater)
-    // Adds: image input, vision_model, refiner_model, temperatures, max_tokens, custom_system_prompt, update_llama_cpp button
+    "auto_clean": true,
+    "error_lint": true,
+    "lint_cleaner_enabled": true,
     "enable_llm_features": false,
-
-    // Enable Danbooru API integration (fetch character tags from Danbooru API)
-    // Adds: danbooru_threshold, danbooru_max_tags parameters
     "enable_danbooru_features": false,
-
-    // Enable tag autocomplete from CSV files (Forge-style tag suggestions)
-    // Loads tags from autocomplete-tags/ folder for autocomplete after comma/space
-    "enable_tag_autocomplete": true
+    "enable_tag_autocomplete": true,
+    "enable_debug_output": false
 }

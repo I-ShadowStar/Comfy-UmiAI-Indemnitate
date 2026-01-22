@@ -69,6 +69,7 @@ app.registerExtension({
                 container.appendChild(title);
 
                 const tools = [
+                    { label: "Settings", icon: "⚙️", action: () => window.umiSettingsDialog?.show() },
                     { label: "Lora Browser", icon: "🎴", action: () => window.umiLoraBrowser?.show() },
                     { label: "Image Browser", icon: "🖼️", action: () => window.umiImageBrowser?.show() },
                     { label: "Prompt History", icon: "📜", action: () => window.umiHistoryBrowser?.show() },

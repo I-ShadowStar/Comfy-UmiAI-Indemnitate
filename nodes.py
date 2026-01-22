@@ -59,6 +59,44 @@ LORA_MEMORY_CACHE = OrderedDict()
 folder_paths.add_model_folder_path("llm", os.path.join(folder_paths.models_dir, "llm"))
 
 # ==============================================================================
+# SETTINGS LOADER (Early initialization before any functions that use settings)
+# ==============================================================================
+def load_umi_settings():
+    """Load user settings from umi_settings.json"""
+    settings_path = os.path.join(os.path.dirname(__file__), "umi_settings.json")
+    defaults = {
+        'use_folder_paths': False,  # False = __MyFile__, True = __Series/MyFile__
+        'csv_namespace': True,  # Add $csv_ prefixed variables for CSV columns
+        'yaml_namespace': True,  # Add $yaml_ prefixed variables for YAML entries
+        'rng_streams': False,  # Use deterministic RNG streams per scope/tag
+        'auto_clean': True,  # Auto-clean prompts (remove extra commas/spaces)
+        'error_lint': False,  # Show detailed error messages vs user-friendly warnings
+        'lint_cleaner_enabled': True,  # Enable the prompt linting and cleaning UI
+        'enable_llm_features': False,  # Enable LLM/Vision features (vision models, refiner, etc.)
+        'enable_danbooru_features': False,  # Enable Danbooru API integration
+        'enable_tag_autocomplete': True,  # Enable tag autocomplete from CSV files
+        'enable_debug_output': False,  # Enable debug output in console
+    }
+
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                user_settings = json.load(f)
+                defaults.update({k: v for k, v in user_settings.items() if not k.startswith('_')})
+        except Exception as e:
+            print(f"[UmiAI] Warning: Could not load umi_settings.json: {e}")
+
+    return defaults
+
+# Cache settings at startup
+UMI_SETTINGS = load_umi_settings()
+
+def umi_debug_print(*args, **kwargs):
+    """Conditionally print debug messages based on enable_debug_output setting"""
+    if UMI_SETTINGS.get('enable_debug_output', False):
+        print(*args, **kwargs)
+
+# ==============================================================================
 # OPTIONAL IMPORTS (LLM & Downloader)
 # ==============================================================================
 LLAMA_CPP_AVAILABLE = False
@@ -80,15 +118,15 @@ except ImportError:
 # AUTO-UPDATE LOGIC
 # ==============================================================================
 def perform_library_update():
-    print("\n[UmiAI] STARTING AUTO-UPDATE OF LLAMA-CPP-PYTHON...")
-    
+    umi_debug_print("\n[UmiAI] STARTING AUTO-UPDATE OF LLAMA-CPP-PYTHON...")
+
     # 1. Detect CUDA Version to choose right wheel
     cuda_ver = ""
     try:
         raw_ver = torch.version.cuda
         if raw_ver:
             cuda_ver = raw_ver.replace(".", "")
-            print(f"[UmiAI] Detected CUDA Version: {raw_ver}")
+            umi_debug_print(f"[UmiAI] Detected CUDA Version: {raw_ver}")
     except:
         pass
 
@@ -104,25 +142,25 @@ def perform_library_update():
         # Fallback for CPU only
         extra_url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
 
-    print(f"[UmiAI] Target Wheel URL: {extra_url}")
+    umi_debug_print(f"[UmiAI] Target Wheel URL: {extra_url}")
 
     # 3. Construct Pip Command
     cmd = [
-        sys.executable, "-m", "pip", "install", 
-        "llama-cpp-python", 
-        "--upgrade", "--force-reinstall", "--no-cache-dir", 
+        sys.executable, "-m", "pip", "install",
+        "llama-cpp-python",
+        "--upgrade", "--force-reinstall", "--no-cache-dir",
         "--extra-index-url", extra_url
     ]
 
     try:
         subprocess.check_call(cmd)
-        print("\n[UmiAI] UPDATE SUCCESSFUL!")
-        print("[UmiAI] =====================================================")
-        print("[UmiAI] YOU MUST RESTART COMFYUI NOW FOR CHANGES TO TAKE EFFECT.")
-        print("[UmiAI] =====================================================\n")
+        umi_debug_print("\n[UmiAI] UPDATE SUCCESSFUL!")
+        umi_debug_print("[UmiAI] =====================================================")
+        umi_debug_print("[UmiAI] YOU MUST RESTART COMFYUI NOW FOR CHANGES TO TAKE EFFECT.")
+        umi_debug_print("[UmiAI] =====================================================\n")
         return True
     except subprocess.CalledProcessError as e:
-        print(f"\n[UmiAI] UPDATE FAILED: {e}")
+        umi_debug_print(f"\n[UmiAI] UPDATE FAILED: {e}")
         return False
 
 # ==============================================================================
@@ -202,30 +240,6 @@ DOWNLOADABLE_MODELS = {
 }
 
 ALL_KEY = 'all_files_index'
-
-def load_umi_settings():
-    """Load user settings from umi_settings.json"""
-    settings_path = os.path.join(os.path.dirname(__file__), "umi_settings.json")
-    defaults = {
-        'use_folder_paths': False,  # False = __MyFile__, True = __Series/MyFile__
-        'csv_namespace': True,  # Add $csv_ prefixed variables for CSV columns
-        'yaml_namespace': True,  # Add $yaml_ prefixed variables for YAML entries
-        'rng_streams': False,  # Use deterministic RNG streams per scope/tag
-        'lint_cleaner_enabled': True,  # Enable the prompt linting and cleaning UI
-    }
-    
-    if os.path.exists(settings_path):
-        try:
-            with open(settings_path, 'r', encoding='utf-8') as f:
-                user_settings = json.load(f)
-                defaults.update({k: v for k, v in user_settings.items() if not k.startswith('_')})
-        except Exception as e:
-            print(f"[UmiAI] Warning: Could not load umi_settings.json: {e}")
-    
-    return defaults
-
-# Cache settings at startup
-UMI_SETTINGS = load_umi_settings()
 
 def is_valid_image(image_input):
     """Safe check for image tensor availability."""
@@ -496,7 +510,7 @@ class TagLoader(TagLoaderBase):
                     return strip_prompt_comments(content)
                 except Exception as e:
                     if self.verbose:
-                        print(f"[UmiAI] Error reading prompt file {full_path}: {e}")
+                        umi_debug_print(f"[UmiAI] Error reading prompt file {full_path}: {e}")
                     return None
         return None
 
@@ -512,7 +526,7 @@ class TagLoader(TagLoaderBase):
         
         # Rebuild if setting changed
         if GLOBAL_INDEX['built'] and cached_setting != self.use_folder_paths:
-            print(f"[UmiAI] Rebuilding index: use_folder_paths changed from {cached_setting} to {self.use_folder_paths}")
+            umi_debug_print(f"[UmiAI] Rebuilding index: use_folder_paths changed from {cached_setting} to {self.use_folder_paths}")
             # Need to rebuild lookup maps with new setting and reset cache
             self.refresh_maps()
             GLOBAL_INDEX['built'] = False  # Force rebuild
@@ -572,13 +586,13 @@ class TagLoader(TagLoaderBase):
                         if isinstance(data, dict):
                             merged_globals.update({str(k): str(v) for k, v in data.items()})
                 except yaml.YAMLError as e:
-                    print(f"[UmiAI] ERROR: Malformed globals.yaml at {global_path}: {e}")
-                    print(f"[UmiAI] Global variables from this file will not be loaded. Please fix YAML syntax.")
+                    umi_debug_print(f"[UmiAI] ERROR: Malformed globals.yaml at {global_path}: {e}")
+                    umi_debug_print(f"[UmiAI] Global variables from this file will not be loaded. Please fix YAML syntax.")
                 except UnicodeDecodeError as e:
-                    print(f"[UmiAI] ERROR: Encoding issue in globals.yaml at {global_path}: {e}")
-                    print(f"[UmiAI] File must be UTF-8 encoded.")
+                    umi_debug_print(f"[UmiAI] ERROR: Encoding issue in globals.yaml at {global_path}: {e}")
+                    umi_debug_print(f"[UmiAI] File must be UTF-8 encoded.")
                 except Exception as e:
-                    print(f"[UmiAI] WARNING: Error loading globals.yaml at {global_path}: {e}")
+                    umi_debug_print(f"[UmiAI] WARNING: Error loading globals.yaml at {global_path}: {e}")
         return merged_globals
 
     def process_yaml_entry(self, title, entry_data):
@@ -598,7 +612,7 @@ class TagLoader(TagLoaderBase):
         if requested_tag == ALL_KEY:
             self.build_index()
             if verbose:
-                print(f"[UmiAI] load_tags(ALL_KEY) returning {len(self.yaml_entries)} YAML entries")
+                umi_debug_print(f"[UmiAI] load_tags(ALL_KEY) returning {len(self.yaml_entries)} YAML entries")
             return self.yaml_entries
 
         # Fix 12: Check modification time before using cached data
@@ -612,7 +626,7 @@ class TagLoader(TagLoaderBase):
                 else:
                     # File has been modified, invalidate cache
                     if verbose:
-                        print(f"[UmiAI] File '{requested_tag}' modified, reloading...")
+                        umi_debug_print(f"[UmiAI] File '{requested_tag}' modified, reloading...")
 
         lower_tag = requested_tag.lower()
 
@@ -848,7 +862,7 @@ class TagSelector(TagSelectorBase):
 
             if not filtered_tags:
                 if self.verbose:
-                    print(f"[UmiAI] WARNING: No entries in '{parsed_tag}' matched logic '{logic_filter}'.")
+                    umi_debug_print(f"[UmiAI] WARNING: No entries in '{parsed_tag}' matched logic '{logic_filter}'.")
                 if self.is_failfast_enabled():
                     return f"<<ERROR_NO_MATCHES:{logic_filter} in {parsed_tag}>>"
                 return f"[NO_MATCHES: {logic_filter} in {parsed_tag}]"
@@ -1023,7 +1037,7 @@ class TagSelector(TagSelectorBase):
         # Fix 11: Better error messages - show which logic expression failed to match
         logic_expr = " ".join(str(g) for g in groups)
         if self.verbose:
-            print(f"[UmiAI] WARNING: No YAML entries matched tag logic '{logic_expr}' in '{parsed_tag}'.")
+            umi_debug_print(f"[UmiAI] WARNING: No YAML entries matched tag logic '{logic_expr}' in '{parsed_tag}'.")
         return f"[NO_MATCHES: {logic_expr}]"
 
     def select(self, tag, groups=None):
@@ -1052,7 +1066,7 @@ class TagSelector(TagSelectorBase):
                         return result
             # Fix 11: Better error messages - indicate glob pattern found no matches
             if self.verbose:
-                print(f"[UmiAI] WARNING: Glob pattern '{parsed_tag}' matched no wildcard files.")
+                umi_debug_print(f"[UmiAI] WARNING: Glob pattern '{parsed_tag}' matched no wildcard files.")
             if self.is_failfast_enabled():
                 return f"<<ERROR_GLOB_NO_MATCHES:{parsed_tag}>>"
             return f"[GLOB_NO_MATCHES: {parsed_tag}]"
@@ -1101,10 +1115,10 @@ class TagSelector(TagSelectorBase):
                 tags = self.tag_loader.load_tags(ALL_KEY, self.verbose)
 
                 if self.verbose:
-                    print(f"[UmiAI] Tag search for '{tag_name}': found {len(tags) if isinstance(tags, dict) else 0} YAML entries")
+                    umi_debug_print(f"[UmiAI] Tag search for '{tag_name}': found {len(tags) if isinstance(tags, dict) else 0} YAML entries")
                     if isinstance(tags, dict):
                         matching = [title for title, entry in tags.items() if tag_name.lower() in [t.lower() for t in entry.get('tags', [])]]
-                        print(f"[UmiAI] Entries with tag '{tag_name}': {matching}")
+                        umi_debug_print(f"[UmiAI] Entries with tag '{tag_name}': {matching}")
 
                 # Filter by tag and convert to format expected by get_tag_group_choice
                 if isinstance(tags, dict):
@@ -1146,7 +1160,7 @@ class TagSelector(TagSelectorBase):
 
         # Fix 11: Better error messages - provide helpful feedback for missing wildcards
         if self.verbose:
-            print(f"[UmiAI] WARNING: Wildcard '{parsed_tag}' not found or is empty.")
+            umi_debug_print(f"[UmiAI] WARNING: Wildcard '{parsed_tag}' not found or is empty.")
         if self.is_failfast_enabled():
             return f"<<ERROR_WILDCARD_NOT_FOUND:{parsed_tag}>>"
         return f"[WILDCARD_NOT_FOUND: {parsed_tag}]" 
@@ -1188,7 +1202,7 @@ class VisionReplacer:
 
     def replace(self, prompt):
         def _process_vision_tag(match):
-            print("[UmiAI] Found Vision Tag. Processing...")
+            umi_debug_print("[UmiAI] Found Vision Tag. Processing...")
             
             if self.vision_model == "None":
                 return "[VISION_ERROR: No Vision Model Selected]"
@@ -1241,7 +1255,7 @@ class LLMReplacer:
             if not content: 
                 return ""
             
-            print(f"[UmiAI] Found LLM Tag. Processing: {content[:20]}...")
+            umi_debug_print(f"[UmiAI] Found LLM Tag. Processing: {content[:20]}...")
             
             if self.refiner_model == "None":
                 return "[LLM_ERROR: No Refiner Model Selected]"
@@ -1324,8 +1338,8 @@ class TagReplacer(TagReplacerBase):
         while p != prompt and count < max_iterations:
             # Cycle detection: check if we've seen this exact prompt before
             if p in self.replacement_history:
-                print(f"[UmiAI] WARNING: Cycle detected in wildcard replacement. Breaking loop to prevent infinite recursion.")
-                print(f"[UmiAI] Problematic prompt fragment: {p[:100]}...")
+                umi_debug_print(f"[UmiAI] WARNING: Cycle detected in wildcard replacement. Breaking loop to prevent infinite recursion.")
+                umi_debug_print(f"[UmiAI] Problematic prompt fragment: {p[:100]}...")
                 break
 
             self.replacement_history.append(prompt)
@@ -1335,7 +1349,7 @@ class TagReplacer(TagReplacerBase):
 
         # Warn if we hit the iteration limit
         if count >= max_iterations:
-            print(f"[UmiAI] WARNING: Reached maximum wildcard replacement iterations ({max_iterations}). Possible nested wildcards.")
+            umi_debug_print(f"[UmiAI] WARNING: Reached maximum wildcard replacement iterations ({max_iterations}). Possible nested wildcards.")
 
         p = self.replace_functions(p)
 
@@ -1515,7 +1529,7 @@ class LoRAHandler:
                             except:
                                 pass
                 except Exception as e:
-                    print(f"[UmiAI] Error reading metadata for {lora_name}: {e}")
+                    umi_debug_print(f"[UmiAI] Error reading metadata for {lora_name}: {e}")
 
             return [], "none"
 
@@ -1650,10 +1664,10 @@ class LoRAHandler:
                     strength = float(parts[1].strip())
                     # Input validation: clamp strength to valid range
                     if strength < 0.0 or strength > 5.0:
-                        print(f"[UmiAI] WARNING: LoRA strength {strength} for '{name}' is out of range. Clamping to [0.0, 5.0].")
+                        umi_debug_print(f"[UmiAI] WARNING: LoRA strength {strength} for '{name}' is out of range. Clamping to [0.0, 5.0].")
                         strength = max(0.0, min(5.0, strength))
                 except ValueError as e:
-                    print(f"[UmiAI] ERROR: Invalid LoRA strength '{parts[1].strip()}' for '{name}'. Using 1.0 as default.")
+                    umi_debug_print(f"[UmiAI] ERROR: Invalid LoRA strength '{parts[1].strip()}' for '{name}'. Using 1.0 as default.")
                     name = content
                     strength = 1.0
             else:
@@ -1689,10 +1703,10 @@ class LoRAHandler:
                         lora = self.patch_zimage_lora(lora)
                     model, clip = comfy.sd.load_lora_for_models(model, clip, lora, strength, strength)
                 except Exception as e:
-                    print(f"[UmiAI] Failed to load LoRA {name}: {e}")
+                    umi_debug_print(f"[UmiAI] Failed to load LoRA {name}: {e}")
                     lora_info_output.append(f"Error loading: {e}")
             else:
-                 print(f"[UmiAI] LoRA not found: {name}")
+                 umi_debug_print(f"[UmiAI] LoRA not found: {name}")
                  lora_info_output.append(f"[LORA: {name}] - NOT FOUND")
         
         if behavior == "Append to Prompt":
@@ -1742,8 +1756,7 @@ class UmiAIWildcardNode:
                 "lora_tags_behavior": (["Append to Prompt", "Disabled", "Prepend to Prompt"], {"default": "Append to Prompt"}),
                 "lora_max_tags": ("INT", {"default": 5, "min": 0, "max": 20, "step": 1}),
                 "lora_cache_limit": ("INT", {"default": 5, "min": 0, "max": 50, "step": 1}),
-                "auto_clean": ("BOOLEAN", {"default": True, "tooltip": "Auto-clean prompt: remove extra commas/spaces, fix BREAK formatting"}),
-                "error_lint": ("BOOLEAN", {"default": False, "label_on": "Error Lint: ON", "label_off": "Error Lint: OFF", "tooltip": "Show detailed error messages (<<ERROR_...>>) instead of user-friendly warnings ([...])"}),
+                # NOTE: auto_clean and error_lint are now controlled via UMI Settings panel (umi_settings.json)
                 "use_folder_paths": ("BOOLEAN", {"default": False, "tooltip": "Show folder paths in wildcards: __Series/MyFile__ vs __MyFile__"}),
                 "width": ("INT", {"default": 1024, "min": 64, "max": 8192}),
                 "height": ("INT", {"default": 1024, "min": 64, "max": 8192}),
@@ -1818,10 +1831,10 @@ class UmiAIWildcardNode:
             local_file_path = os.path.join(target_folder, filename)
             if not os.path.exists(local_file_path):
                 try:
-                    print(f"[UmiAI] Downloading {filename}...")
+                    umi_debug_print(f"[UmiAI] Downloading {filename}...")
                     local_file_path = hf_hub_download(repo_id=repo_id, filename=filename, local_dir=target_folder, local_dir_use_symlinks=False)
                 except Exception as e:
-                    print(f"[UmiAI] Download failed: {e}")
+                    umi_debug_print(f"[UmiAI] Download failed: {e}")
                     return None, None
 
             # Download Projector/Adapter (Vision) if required
@@ -1833,7 +1846,7 @@ class UmiAIWildcardNode:
                     mmproj_path = mmproj_local
                 else:
                     try:
-                        print(f"[UmiAI] Downloading Vision Adapter {mmproj_file}...")
+                        umi_debug_print(f"[UmiAI] Downloading Vision Adapter {mmproj_file}...")
                         mmproj_path = hf_hub_download(repo_id=repo_id, filename=mmproj_file, local_dir=target_folder, local_dir_use_symlinks=False)
                     except Exception:
                         pass
@@ -1910,7 +1923,7 @@ class UmiAIWildcardNode:
             if is_valid_image(image_input) and not mmproj_path:
                 return "[VISION_ERROR: Model Loaded but Vision Adapter (.mmproj) Not Found.]"
 
-            print(f"[UmiAI] Vision Adapter Loaded: {mmproj_path}")
+            umi_debug_print(f"[UmiAI] Vision Adapter Loaded: {mmproj_path}")
 
             llm = None
             try:
@@ -1963,7 +1976,7 @@ class UmiAIWildcardNode:
                     return "[VISION_ERROR: Projector Mismatch. Please use Auto-Update to install compatible llama-cpp-python.]"
                     
             except Exception as e:
-                print(f"[UmiAI] LLM/Vision Error: {e}")
+                umi_debug_print(f"[UmiAI] LLM/Vision Error: {e}")
                 return f"[Error: {str(e)}]"
             
             finally:
@@ -1990,7 +2003,7 @@ class UmiAIWildcardNode:
             if not refiner_path:
                 return raw_vision_output # Fallback to raw output if refiner fails
 
-            print(f"[UmiAI] Loading Refiner: {refiner_path}")
+            umi_debug_print(f"[UmiAI] Loading Refiner: {refiner_path}")
             
             refiner_llm = None
             try:
@@ -2013,7 +2026,7 @@ class UmiAIWildcardNode:
                 is_dolphin_or_llama = "dolphin" in refiner_choice.lower() or "llama" in refiner_choice.lower() or "imp" in refiner_choice.lower()
                 
                 if is_dolphin_or_llama:
-                    print("[UmiAI] Detected Dolphin/Llama-3 model. Using Manual Prompt Construction.")
+                    umi_debug_print("[UmiAI] Detected Dolphin/Llama-3 model. Using Manual Prompt Construction.")
                     
                     # Manually constructed Llama-3 prompt string
                     prompt_string = (
@@ -2048,7 +2061,7 @@ class UmiAIWildcardNode:
                     return output['choices'][0]['message']['content'].strip()
 
             except Exception as e:
-                print(f"[UmiAI] Refiner Error: {e}")
+                umi_debug_print(f"[UmiAI] Refiner Error: {e}")
                 return raw_vision_output # Fallback
             
             finally:
@@ -2134,8 +2147,9 @@ class UmiAIWildcardNode:
         lora_tags_behavior = self.get_val(kwargs, "lora_tags_behavior", "Append to Prompt", str)
         lora_max_tags = self.get_val(kwargs, "lora_max_tags", 5, int)
         lora_cache_limit = self.get_val(kwargs, "lora_cache_limit", 5, int)
-        auto_clean = kwargs.get("auto_clean", True) if "auto_clean" in kwargs else True
-        error_lint = kwargs.get("error_lint", False) if "error_lint" in kwargs else False
+        # Read from global settings (umi_settings.json) so settings panel toggles take effect
+        auto_clean = UMI_SETTINGS.get('auto_clean', True)
+        error_lint = UMI_SETTINGS.get('error_lint', False)
         use_folder_paths = kwargs.get("use_folder_paths", False)
         input_negative = self.get_val(kwargs, "input_negative", "", str)
 
@@ -2167,7 +2181,7 @@ class UmiAIWildcardNode:
         # Sync node toggle to global settings so autocomplete uses same setting
         if UMI_SETTINGS.get('use_folder_paths', False) != use_folder_paths:
             UMI_SETTINGS['use_folder_paths'] = use_folder_paths
-            print(f"[UmiAI] Updated global use_folder_paths to: {use_folder_paths}")
+            umi_debug_print(f"[UmiAI] Updated global use_folder_paths to: {use_folder_paths}")
 
         all_wildcard_paths = get_all_wildcard_paths()
         tag_loader = TagLoader(all_wildcard_paths, options)
@@ -2205,8 +2219,8 @@ class UmiAIWildcardNode:
         while previous_prompt != prompt and iterations < 50:
             # Cycle detection: check if we've seen this exact prompt before
             if prompt in prompt_history:
-                print(f"[UmiAI] WARNING: Cycle detected in prompt processing. Breaking loop to prevent infinite recursion.")
-                print(f"[UmiAI] Problematic prompt fragment: {prompt[:100]}...")
+                umi_debug_print(f"[UmiAI] WARNING: Cycle detected in prompt processing. Breaking loop to prevent infinite recursion.")
+                umi_debug_print(f"[UmiAI] Problematic prompt fragment: {prompt[:100]}...")
                 break
 
             prompt_history.append(prompt)
@@ -2241,7 +2255,7 @@ class UmiAIWildcardNode:
 
         # Warn if we hit the iteration limit
         if iterations >= 50:
-            print(f"[UmiAI] WARNING: Reached maximum processing iterations (50). Possible recursive wildcards or variables.")
+            umi_debug_print(f"[UmiAI] WARNING: Reached maximum processing iterations (50). Possible recursive wildcards or variables.")
 
 
         
@@ -3055,7 +3069,7 @@ def load_emotions_config():
             with open(config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"[UmiAI] Error loading emotions.json: {e}")
+            umi_debug_print(f"[UmiAI] Error loading emotions.json: {e}")
     return {}
 
 class UmiEmotionStudio:
@@ -3378,7 +3392,7 @@ async def get_wildcards(request):
                                 for t in entry['Tags']:
                                     tags.add(str(t).strip())
             except Exception as e:
-                print(f"[UmiAI] Error parsing YAML {filepath}: {e}")
+                umi_debug_print(f"[UmiAI] Error parsing YAML {filepath}: {e}")
     
     loras = folder_paths.get_filename_list("loras")
     loras = sorted(loras) if loras else []
@@ -4664,7 +4678,7 @@ async def get_autocomplete_tags(request):
             tags_folder = os.path.join(custom_node_dir, "autocomplete-tags")
 
             if not os.path.exists(tags_folder):
-                print(f"[UmiAI] Autocomplete tags folder not found: {tags_folder}")
+                umi_debug_print(f"[UmiAI] Autocomplete tags folder not found: {tags_folder}")
                 return web.json_response({"tags": [], "count": 0, "total": 0})
 
             all_tags = set()  # Use set for faster lookups
@@ -4687,15 +4701,15 @@ async def get_autocomplete_tags(request):
                                     all_tags.add(tag)
                                     total_loaded += 1
 
-                    print(f"[UmiAI] Loaded tags from {filename}")
+                    umi_debug_print(f"[UmiAI] Loaded tags from {filename}")
 
                 except Exception as e:
-                    print(f"[UmiAI] Error loading CSV {filename}: {e}")
+                    umi_debug_print(f"[UmiAI] Error loading CSV {filename}: {e}")
 
             # Convert to sorted list and cache
             AUTOCOMPLETE_TAGS_CACHE["tags"] = sorted(list(all_tags))
             AUTOCOMPLETE_TAGS_CACHE["loaded"] = True
-            print(f"[UmiAI] Tag autocomplete cache ready: {len(AUTOCOMPLETE_TAGS_CACHE['tags'])} unique tags")
+            umi_debug_print(f"[UmiAI] Tag autocomplete cache ready: {len(AUTOCOMPLETE_TAGS_CACHE['tags'])} unique tags")
 
         # Filter tags based on query
         cached_tags = AUTOCOMPLETE_TAGS_CACHE["tags"]
@@ -4713,5 +4727,5 @@ async def get_autocomplete_tags(request):
         })
 
     except Exception as e:
-        print(f"[UmiAI] Error loading autocomplete tags: {e}")
+        umi_debug_print(f"[UmiAI] Error loading autocomplete tags: {e}")
         return web.json_response({"tags": [], "count": 0, "total": 0, "error": str(e)}, status=500)

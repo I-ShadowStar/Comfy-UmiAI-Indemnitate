@@ -985,8 +985,8 @@ function applyHighlighting(textareaEl, widget = null, node = null, nodeLintEnabl
     // Apply transparent overlay style to textarea
     textareaEl.classList.add("umi-syntax-textarea");
 
-    // Lint bar is shown if global setting is enabled AND node-level error_lint is enabled
-    const showLintBar = lintCleanerEnabled && nodeLintEnabled;
+    // Lint bar is shown if global setting is enabled (node-level widget removed)
+    const showLintBar = lintCleanerEnabled;
 
     if (showLintBar) {
         // Add some bottom padding for the lint bar
@@ -1157,13 +1157,8 @@ function applyHighlighting(textareaEl, widget = null, node = null, nodeLintEnabl
     const syncHighlight = () => {
         let text = textareaEl.value;
 
-        // Get current node-level lint setting first for auto-clean check
-        let currentNodeLintEnabled = nodeLintEnabled;
-        if (node) {
-            const errorLintWidget = node.widgets?.find(w => w.name === "error_lint");
-            currentNodeLintEnabled = errorLintWidget ? errorLintWidget.value : false;
-        }
-        const currentShowLintBar = lintCleanerEnabled && currentNodeLintEnabled;
+        // Use global lint cleaner setting (node-level widget was removed)
+        const currentShowLintBar = lintCleanerEnabled;
 
         // Apply auto-clean if enabled
         if (autoCleanEnabled && currentShowLintBar) {
@@ -1343,12 +1338,11 @@ app.registerExtension({
 
                 console.log("[UmiAI Syntax] Found text widget inputEl:", inputEl.tagName);
 
-                // Find error_lint widget to check if linting should be enabled for this node
-                const errorLintWidget = self.widgets?.find(w => w.name === "error_lint");
-                const nodeLintEnabled = errorLintWidget ? errorLintWidget.value : false;
+                // Linting is controlled by global lint_cleaner_enabled setting
+                // (error_lint widget was removed from node, now purely global)
 
-                // Apply highlighting - pass widget and node lint setting
-                const result = applyHighlighting(inputEl, textWidget, self, nodeLintEnabled);
+                // Apply highlighting - pass widget, node ref, and lint enabled (true since global controls it)
+                const result = applyHighlighting(inputEl, textWidget, self, lintCleanerEnabled);
                 if (result) {
                     self._syntaxHighlight = result;
                 }
