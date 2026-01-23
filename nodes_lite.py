@@ -30,7 +30,7 @@ from .nodes import UMI_SETTINGS, umi_debug_print
 # GLOBAL CACHE & SETUP (LITE VERSION - ISOLATED FROM FULL NODE)
 # ==============================================================================
 GLOBAL_CACHE_LITE = {}
-GLOBAL_INDEX_LITE = {'built': False, 'files': set(), 'entries': {}, 'tags': set()}
+GLOBAL_INDEX_LITE = {'built': False, 'files': set(), 'entries': {}, 'tags': set(), 'entry_names': {}}
 
 # Fix 12: File modification time cache to skip rescanning unchanged files
 FILE_MTIME_CACHE_LITE = {}
@@ -69,6 +69,7 @@ class TagLoader(TagLoaderBase):
             # for potential modifications (scan_yaml_for_tags handles mtime checking)
             self.files_index = GLOBAL_INDEX_LITE['files']
             self.umi_tags = GLOBAL_INDEX_LITE['tags']
+            self.entry_names = GLOBAL_INDEX_LITE.get('entry_names', {})
             # Rescan YAML files to check for modifications
             for wildcard_path in self.wildcard_paths:
                 if not os.path.exists(wildcard_path):
@@ -89,8 +90,10 @@ class TagLoader(TagLoaderBase):
         # Reset for fresh build
         self.files_index = set()
         self.umi_tags = set()
+        self.entry_names = {}
         if full_rebuild:
             GLOBAL_INDEX_LITE['entries'] = {}
+            GLOBAL_INDEX_LITE['entry_names'] = {}
             # Clear YAML mtime cache on full rebuild
             yaml_keys = [k for k in FILE_MTIME_CACHE_LITE.keys() if k.startswith('yaml_tags_')]
             for k in yaml_keys:
@@ -121,6 +124,7 @@ class TagLoader(TagLoaderBase):
         GLOBAL_INDEX_LITE['built'] = True
         GLOBAL_INDEX_LITE['files'] = self.files_index
         GLOBAL_INDEX_LITE['tags'] = self.umi_tags
+        GLOBAL_INDEX_LITE['entry_names'] = self.entry_names
         GLOBAL_INDEX_LITE['use_folder_paths'] = self.use_folder_paths
 
     def scan_yaml_for_tags(self, file_path):
@@ -151,9 +155,26 @@ class TagLoader(TagLoaderBase):
                 return
 
             tags_found = []
+            entry_names_found = []
             for entry_key, entry_data in data.items():
                 if not isinstance(entry_data, dict):
                     continue
+
+                # Track entry name for direct lookup in <[EntryName]> syntax
+                entry_key_str = str(entry_key).strip()
+                entry_key_lower = entry_key_str.lower()
+                if entry_key_str and entry_key_lower not in GLOBAL_INDEX_LITE['entry_names']:
+                    self.entry_names[entry_key_lower] = {
+                        'file': file_path,
+                        'entry_key': entry_key,
+                        'data': entry_data
+                    }
+                    GLOBAL_INDEX_LITE['entry_names'][entry_key_lower] = {
+                        'file': file_path,
+                        'entry_key': entry_key,
+                        'data': entry_data
+                    }
+                    entry_names_found.append(entry_key_str)
 
                 entry_tags = entry_data.get('Tags', [])
                 if not isinstance(entry_tags, list):
@@ -702,7 +723,35 @@ class TagReplacer(TagReplacerBase):
         text = re.sub(pattern_logic, logic_replacer, text)
 
         pattern_angle = r'<\[([^\]]+)\]>'
-        text = re.sub(pattern_angle, logic_replacer, text)
+
+        def angle_replacer(match):
+            expression = match.group(1)
+            expression_lower = expression.lower()
+            
+            # Check if expression is a direct entry name (Option A: make strings work)
+            if expression_lower in GLOBAL_INDEX_LITE['entry_names']:
+                entry_info = GLOBAL_INDEX_LITE['entry_names'][expression_lower]
+                entry_data = entry_info['data']
+                prompts = entry_data.get('Prompts', [])
+                
+                # Convert prompts to list if it's a string
+                if isinstance(prompts, str):
+                    prompts = [prompts]
+                
+                if prompts:
+                    rng = self.tag_selector.get_rng(expression)
+                    selected_prompt = rng.choice(prompts)
+                    umi_debug_print(f"[UmiAI Lite DEBUG] <[{expression}]> matched entry name, selected prompt: {selected_prompt[:50]}")
+                    return selected_prompt
+                else:
+                    umi_debug_print(f"[UmiAI Lite DEBUG] <[{expression}]> matched entry name but has no Prompts")
+                    return f"[NO_PROMPTS: {expression}]"
+            
+            # Fallback to logic-based filtering if not a direct entry name
+            umi_debug_print(f"[UmiAI Lite DEBUG] <[{expression}]> not a direct entry name, treating as logic filter")
+            return self.tag_selector.select_by_tags(expression)
+
+        text = re.sub(pattern_angle, angle_replacer, text)
 
         # Phase 5: Support __filename[logic]__ syntax for .txt wildcards with logic
         pattern_file_logic = r'__([a-zA-Z0-9_-]+)\[([^\]]+)\]__'
