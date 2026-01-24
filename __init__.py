@@ -5,8 +5,8 @@ from .nodes import (UmiSaveImage,
                     # UmiSpriteGenerator as UmiSpriteGenerator2, UmiDatasetGenerator as UmiDatasetGenerator2,
                     # UmiPositionControl as UmiPositionControl2, UmiVisualCameraControl as UmiVisualCameraControl2,
                     UMI_SETTINGS, umi_debug_print)
-from .nodes_lite import UmiAIWildcardNodeLite  # Lite version (default for users)
-from .nodes_model_manager import UmiModelManager, UmiModelSelector
+from .nodes_lite import UmiAIWildcardNodeLite, UmiTextBypass  # Lite version (default for users)
+# from .nodes_model_manager import UmiModelManager, UmiModelSelector
 from server import PromptServer
 from aiohttp import web
 import os
@@ -1505,25 +1505,27 @@ CORE_NODE_CLASS_MAPPINGS = {
     # Full version available in nodes.py for debugging - uncomment to use instead of Lite:
     # "UmiAIWildcardNode": UmiAIWildcardNode,
     "UmiSaveImage": UmiSaveImage,
+    "UmiTextBypass": UmiTextBypass,
     # Disabled nodes - uncomment to re-enable
     # "UmiPoseGenerator": UmiPoseGenerator,
     # "UmiEmotionGenerator": UmiEmotionGenerator,
     # "UmiEmotionStudio": UmiEmotionStudio,
     # "UmiCharacterDesigner": UmiCharacterCreator2,
-    "UmiModelManager": UmiModelManager,
-    "UmiModelSelector": UmiModelSelector,
+    # "UmiModelManager": UmiModelManager,
+    # "UmiModelSelector": UmiModelSelector,
 }
 
 CORE_NODE_DISPLAY_NAME_MAPPINGS = {
     "UmiAIWildcardNode": "UmiAI Wildcard Processor",
     "UmiSaveImage": "Umi Save Image (with metadata)",
+    "UmiTextBypass": "Umi Bypass",
     # Disabled nodes - uncomment to re-enable
     # "UmiPoseGenerator": "Umi Pose Generator",
     # "UmiEmotionGenerator": "Umi Emotion Generator",
     # "UmiEmotionStudio": "Umi Emotion Studio",
     # "UmiCharacterDesigner": "Umi Character Designer",
-    "UmiModelManager": "Umi Model Manager",
-    "UmiModelSelector": "Umi Model Selector",
+    # "UmiModelManager": "Umi Model Manager",
+    # "UmiModelSelector": "Umi Model Selector",
 }
 
 NODE_CLASS_MAPPINGS = {}
@@ -1542,5 +1544,388 @@ if _bgrm is not None:
 
 # 3. Expose the web directory
 WEB_DIRECTORY = "./js"
+
+# ==============================================================================
+# EXECUTION INTERCEPTOR FOR TEXT BYPASS
+# ==============================================================================
+# Hook into prompt execution to dynamically bypass nodes based on runtime conditions
+
+# Don't install execution hook - it's too fragile across ComfyUI versions
+# Instead, rely on the frontend JS to set bypass mode before queue submission
+print("[UmiTextBypass] Using frontend-based bypass control (see js/umi_text_bypass.js)")
+
+def _umi_coerce_value(value, default, value_type):
+    if value is None:
+        return default
+    try:
+        if value_type == int:
+            return int(float(value))
+        if value_type == float:
+            return float(value)
+        if value_type == str:
+            if isinstance(value, (int, float)):
+                return str(value)
+            return str(value)
+    except Exception:
+        return default
+    return value
+
+def _umi_is_link_value(value):
+    return isinstance(value, (list, tuple)) and len(value) >= 2
+
+_UMI_BYPASS_OUTPUT_INDEX = {
+    "IMAGE": 0,
+    "LATENT": 1,
+    "CONDITIONING": 2,
+    "MODEL": 3,
+    "CLIP": 4,
+    "STRING": 5,
+}
+
+def _umi_get_prompt_graph(prompt_payload):
+    if isinstance(prompt_payload, (list, tuple)) and prompt_payload:
+        prompt_payload = prompt_payload[0]
+    if isinstance(prompt_payload, dict) and "prompt" in prompt_payload:
+        return prompt_payload["prompt"]
+    if isinstance(prompt_payload, dict):
+        return prompt_payload
+    return None
+
+def _umi_collect_downstream_nodes(prompt_graph):
+    downstream = {}
+    for node_id, node_data in prompt_graph.items():
+        inputs = node_data.get("inputs", {})
+        for input_val in inputs.values():
+            if _umi_is_link_value(input_val):
+                src_id = str(input_val[0])
+                downstream.setdefault(src_id, set()).add(str(node_id))
+    return downstream
+
+def _umi_collect_downstream_links(prompt_graph):
+    downstream = {}
+    for node_id, node_data in prompt_graph.items():
+        inputs = node_data.get("inputs", {})
+        for input_name, input_val in inputs.items():
+            if _umi_is_link_value(input_val):
+                src_id = str(input_val[0])
+                src_output = int(input_val[1]) if len(input_val) > 1 else 0
+                downstream.setdefault(src_id, []).append((str(node_id), input_name, src_output))
+    return downstream
+
+def _umi_collect_output_indices(downstream, node_id):
+    output_indices = set()
+    for _, _, src_output in downstream.get(str(node_id), []):
+        output_indices.add(int(src_output))
+    return output_indices
+
+def _umi_get_bypass_output_index(node_inputs):
+    passthrough_type = node_inputs.get("passthrough_type", "IMAGE")
+    if _umi_is_link_value(passthrough_type):
+        return None
+    return _UMI_BYPASS_OUTPUT_INDEX.get(str(passthrough_type))
+
+def _umi_parse_matched_list(value):
+    if value is None or _umi_is_link_value(value):
+        return None
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+        except Exception:
+            return None
+    return None
+
+def _umi_parse_match_index(value):
+    if _umi_is_link_value(value):
+        return None
+    return _umi_coerce_value(value, 0, int)
+
+def _umi_replace_output_nodes(prompt_payload, old_id, new_id):
+    if not isinstance(prompt_payload, dict):
+        return 0
+    replaced = 0
+    for key in ("output", "outputs"):
+        output_list = prompt_payload.get(key)
+        if not isinstance(output_list, list):
+            continue
+        for idx, val in enumerate(output_list):
+            if str(val) == str(old_id):
+                output_list[idx] = str(new_id)
+                replaced += 1
+    return replaced
+
+def _umi_compute_bypass_for_node(node_inputs):
+    text_val = node_inputs.get("text", "")
+    seed_val = node_inputs.get("seed", 0)
+    bypass_phrase_val = node_inputs.get("bypass_phrase", "")
+    bypass_phrases_val = node_inputs.get("bypass_phrases", "")
+    input_negative_val = node_inputs.get("input_negative", "")
+
+    # Skip if required inputs are linked
+    if (_umi_is_link_value(text_val) or _umi_is_link_value(seed_val)
+            or _umi_is_link_value(bypass_phrase_val) or _umi_is_link_value(bypass_phrases_val)):
+        umi_debug_print("[UmiTextBypass] Preview bypass skipped: linked inputs detected")
+        return None, None
+
+    text = _umi_coerce_value(text_val, "", str)
+    seed = _umi_coerce_value(seed_val, 0, int)
+    bypass_phrase = _umi_coerce_value(bypass_phrase_val, "", str)
+    bypass_phrases = _umi_coerce_value(bypass_phrases_val, "", str)
+    input_negative = _umi_coerce_value(input_negative_val, "", str)
+
+    # LLM/Vision optional inputs (only use if not linked)
+    image_input = None
+    if UMI_SETTINGS.get('enable_llm_features', False):
+        image_val = node_inputs.get("image", None)
+        if _umi_is_link_value(image_val):
+            umi_debug_print("[UmiTextBypass] Preview bypass skipped: linked image input detected")
+            return None
+        image_input = image_val
+
+    vision_model = _umi_coerce_value(node_inputs.get("vision_model", "None"), "None", str)
+    refiner_model = _umi_coerce_value(node_inputs.get("refiner_model", "None"), "None", str)
+    vision_temperature = _umi_coerce_value(node_inputs.get("vision_temperature", 0.6), 0.6, float)
+    refiner_temperature = _umi_coerce_value(node_inputs.get("refiner_temperature", 0.7), 0.7, float)
+    max_tokens = _umi_coerce_value(node_inputs.get("max_tokens", 800), 800, int)
+    custom_system_prompt = _umi_coerce_value(node_inputs.get("custom_system_prompt", ""), "", str)
+
+    danbooru_threshold = _umi_coerce_value(node_inputs.get("danbooru_threshold", 0.70), 0.70, float)
+    danbooru_max_tags = _umi_coerce_value(node_inputs.get("danbooru_max_tags", 15), 15, int)
+
+    wildcard_node = UmiAIWildcardNodeLite()
+    matched, _, matched_list = wildcard_node.preview_bypass_matched(
+        text=text,
+        seed=seed,
+        bypass_phrase=bypass_phrase,
+        bypass_phrases=bypass_phrases,
+        input_negative=input_negative,
+        image_input=image_input,
+        vision_model=vision_model,
+        refiner_model=refiner_model,
+        vision_temperature=vision_temperature,
+        refiner_temperature=refiner_temperature,
+        max_tokens=max_tokens,
+        custom_system_prompt=custom_system_prompt,
+        danbooru_threshold=danbooru_threshold,
+        danbooru_max_tags=danbooru_max_tags,
+    )
+    return matched, matched_list
+
+def _umi_bypass_prompt_handler(prompt_payload):
+    try:
+        prompt_graph = _umi_get_prompt_graph(prompt_payload)
+        if not isinstance(prompt_graph, dict):
+            print("[UmiTextBypass DEBUG] prompt_graph is not a dict!")
+            return prompt_payload
+
+        print(f"\n[UmiTextBypass DEBUG] ===== ANALYZING PROMPT GRAPH =====")
+        print(f"[UmiTextBypass DEBUG] Total nodes in graph: {len(prompt_graph)}")
+        print(f"[UmiTextBypass DEBUG] Node types:")
+        for nid, ndata in prompt_graph.items():
+            if isinstance(ndata, dict):
+                print(f"  Node {nid}: {ndata.get('class_type', 'UNKNOWN')}")
+
+        wildcard_cache = {}
+        backend_controls = _umi_has_execution_blocker()
+        bypass_nodes = 0
+        umi_debug_print("[UmiTextBypass] Prompt handler invoked")
+
+        for node_id, node_data in prompt_graph.items():
+            if node_data.get("class_type") != "UmiTextBypass":
+                continue
+            print(f"[UmiTextBypass DEBUG] FOUND UmiTextBypass node: {node_id}")
+            bypass_nodes += 1
+
+            inputs = node_data.get("inputs", {})
+            matched_input = inputs.get("matched", None)
+            matched_list_input = inputs.get("matched_list", None)
+            match_index_input = inputs.get("match_index", 0)
+            matched_value = None
+            matched_list = None
+
+            downstream = _umi_collect_downstream_links(prompt_graph)
+            targets = downstream.get(str(node_id), [])
+            if backend_controls:
+                for target_id, _, _ in targets:
+                    target_node = prompt_graph.get(target_id)
+                    if not isinstance(target_node, dict):
+                        continue
+                    target_node["mode"] = 0
+                continue
+
+            if matched_list_input is not None:
+                if _umi_is_link_value(matched_list_input):
+                    src_id = str(matched_list_input[0])
+                    cached = wildcard_cache.get(src_id)
+                    if cached is None:
+                        src_node = prompt_graph.get(src_id, {})
+                        if src_node.get("class_type") in ("UmiAIWildcardNodeLite", "UmiAIWildcardNode"):
+                            single, match_list = _umi_compute_bypass_for_node(src_node.get("inputs", {}))
+                            cached = {"single": single, "list": match_list}
+                            wildcard_cache[src_id] = cached
+                    if cached:
+                        matched_list = cached.get("list")
+                else:
+                    matched_list = _umi_parse_matched_list(matched_list_input)
+
+            if matched_list is not None:
+                match_index = _umi_parse_match_index(match_index_input)
+                if match_index is not None and 0 <= match_index < len(matched_list):
+                    matched_value = bool(matched_list[match_index])
+
+            if matched_value is None:
+                if _umi_is_link_value(matched_input):
+                    src_id = str(matched_input[0])
+                    cached = wildcard_cache.get(src_id)
+                    if cached is None:
+                        src_node = prompt_graph.get(src_id, {})
+                        if src_node.get("class_type") in ("UmiAIWildcardNodeLite", "UmiAIWildcardNode"):
+                            single, match_list = _umi_compute_bypass_for_node(src_node.get("inputs", {}))
+                            cached = {"single": single, "list": match_list}
+                            wildcard_cache[src_id] = cached
+                    if cached:
+                        matched_value = cached.get("single")
+                elif matched_input is not None:
+                    matched_value = bool(matched_input)
+
+            if matched_value is None:
+                umi_debug_print(f"[UmiTextBypass] Skipping node {node_id}: unable to compute matched")
+                continue
+
+            bypass_output_idx = _umi_get_bypass_output_index(inputs)
+            if bypass_output_idx is None:
+                umi_debug_print(f"[UmiTextBypass] Skipping node {node_id}: passthrough_type is linked or unknown")
+                continue
+
+            target_ids = {target_id for target_id, _, _ in targets}
+            if matched_value:
+                continue
+
+            for target_id in target_ids:
+                output_indices = _umi_collect_output_indices(downstream, target_id)
+                if len(output_indices) > 1:
+                    print(f"[UmiTextBypass] Skipping target {target_id}: multiple output indices {sorted(output_indices)}")
+                    continue
+                if output_indices and bypass_output_idx not in output_indices:
+                    print(f"[UmiTextBypass] Skipping target {target_id}: passthrough output {bypass_output_idx} does not match target output {list(output_indices)[0]}")
+                    continue
+
+                rewired = 0
+                for dst_id, input_name, _ in downstream.get(str(target_id), []):
+                    dst_node = prompt_graph.get(dst_id)
+                    if not isinstance(dst_node, dict):
+                        continue
+                    dst_inputs = dst_node.get("inputs", {})
+                    if input_name in dst_inputs and _umi_is_link_value(dst_inputs[input_name]):
+                        link_src = str(dst_inputs[input_name][0])
+                        if link_src == str(target_id):
+                            dst_inputs[input_name] = [str(node_id), int(bypass_output_idx)]
+                            rewired += 1
+
+                outputs_replaced = _umi_replace_output_nodes(prompt_payload, target_id, node_id)
+                print(f"[UmiTextBypass] Rewired target {target_id} -> bypass {node_id}: links={rewired}, outputs={outputs_replaced}")
+
+        umi_debug_print(f"[UmiTextBypass] Prompt handler complete: {bypass_nodes} bypass nodes")
+        return prompt_payload
+    except Exception as e:
+        print(f"[UmiTextBypass] Prompt handler failed: {e}")
+        return prompt_payload
+
+def _umi_has_execution_blocker():
+    try:
+        from comfy.execution import ExecutionBlocker
+        return ExecutionBlocker is not None
+    except Exception:
+        pass
+    try:
+        from comfy.utils import ExecutionBlocker
+        return ExecutionBlocker is not None
+    except Exception:
+        return False
+
+def _umi_prompt_handler_wrapper(*args, **kwargs):
+    if args:
+        prompt_payload = args[0]
+        updated = _umi_bypass_prompt_handler(prompt_payload)
+        if len(args) == 1:
+            return updated
+        if len(args) == 2:
+            return (updated, args[1])
+        return (updated,) + args[1:]
+    if "prompt" in kwargs:
+        kwargs["prompt"] = _umi_bypass_prompt_handler(kwargs["prompt"])
+    return kwargs
+
+def _umi_install_prompt_handler():
+    try:
+        ps = PromptServer.instance
+        print("[UmiTextBypass] Attempting to install backend prompt handler")
+        print("[UmiTextBypass] PromptServer attrs:", [a for a in dir(ps) if "prompt" in a.lower()])
+        if hasattr(ps, "add_on_prompt_handler"):
+            ps.add_on_prompt_handler(_umi_prompt_handler_wrapper)
+            print("[UmiTextBypass] Installed backend prompt handler via PromptServer.add_on_prompt_handler")
+            return
+        if hasattr(ps, "add_on_prompt"):
+            ps.add_on_prompt(_umi_prompt_handler_wrapper)
+            print("[UmiTextBypass] Installed backend prompt handler via PromptServer.add_on_prompt")
+            return
+
+        pq = getattr(ps, "prompt_queue", None)
+        if pq is not None:
+            print("[UmiTextBypass] prompt_queue attrs:", [a for a in dir(pq) if "prompt" in a.lower()])
+            if hasattr(pq, "add_on_prompt_handler"):
+                pq.add_on_prompt_handler(_umi_prompt_handler_wrapper)
+                print("[UmiTextBypass] Installed backend prompt handler via prompt_queue.add_on_prompt_handler")
+                return
+            if hasattr(pq, "add_on_prompt"):
+                pq.add_on_prompt(_umi_prompt_handler_wrapper)
+                print("[UmiTextBypass] Installed backend prompt handler via prompt_queue.add_on_prompt")
+                return
+            handlers = getattr(pq, "on_prompt_handlers", None)
+            if isinstance(handlers, list):
+                handlers.append(_umi_prompt_handler_wrapper)
+                print("[UmiTextBypass] Installed backend prompt handler via prompt_queue.on_prompt_handlers")
+                return
+
+        print("[UmiTextBypass] Backend prompt handler not supported; using frontend bypass")
+    except Exception as e:
+        print(f"[UmiTextBypass] Failed to install prompt handler: {e}")
+
+_umi_install_prompt_handler()
+
+@PromptServer.instance.routes.post("/umi/bypass_preview")
+async def _umi_bypass_preview(request):
+    import sys
+    try:
+        data = await request.json()
+    except Exception as e:
+        print(f"[UmiTextBypass DEBUG] JSON parse error: {e}", flush=True)
+        return web.json_response({"error": "invalid json"}, status=400)
+
+    prompt_payload = data.get("prompt")
+    if prompt_payload is None:
+        print("[UmiTextBypass DEBUG] /umi/bypass_preview: prompt_payload is None", flush=True)
+        return web.json_response({"prompt": None})
+
+    print(f"[UmiTextBypass DEBUG] /umi/bypass_preview called", flush=True)
+    print(f"[UmiTextBypass DEBUG] prompt_payload type: {type(prompt_payload)}", flush=True)
+    print(f"[UmiTextBypass DEBUG] prompt_payload keys: {list(prompt_payload.keys()) if isinstance(prompt_payload, dict) else 'not a dict'}", flush=True)
+    sys.stdout.flush()
+
+    try:
+        updated = _umi_bypass_prompt_handler(prompt_payload)
+    except Exception as e:
+        print(f"[UmiTextBypass DEBUG] Handler exception: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        return web.json_response({"prompt": prompt_payload})
+    if isinstance(updated, dict) and "prompt" in updated:
+        prompt_payload = updated.get("prompt")
+    else:
+        prompt_payload = updated
+    return web.json_response({"prompt": prompt_payload})
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']

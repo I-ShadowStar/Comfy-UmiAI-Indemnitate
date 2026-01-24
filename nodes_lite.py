@@ -27,6 +27,11 @@ from .shared_utils import (
 from .nodes import UMI_SETTINGS, umi_debug_print
 
 # ==============================================================================
+# GLOBAL TEXT CACHE FOR BYPASS NODE
+# Stores the last generated text from each wildcard processor node
+WILDCARD_TEXT_CACHE = {}
+
+# ==============================================================================
 # GLOBAL CACHE & SETUP (LITE VERSION - ISOLATED FROM FULL NODE)
 # ==============================================================================
 GLOBAL_CACHE_LITE = {}
@@ -46,6 +51,19 @@ def get_all_wildcard_paths():
     # Import the shared function
     from .shared_utils import get_all_wildcard_paths as shared_get_paths
     return shared_get_paths()
+
+def _get_execution_blocker_class():
+    """Try to resolve ComfyUI's ExecutionBlocker without hard dependency."""
+    try:
+        from comfy.execution import ExecutionBlocker
+        return ExecutionBlocker
+    except Exception:
+        pass
+    try:
+        from comfy.utils import ExecutionBlocker
+        return ExecutionBlocker
+    except Exception:
+        return None
 
 # Note: escape_unweighted_colons and log_prompt_to_history are imported from shared_utils
 # Keeping lite-specific get_all_wildcard_paths() since it only searches internal wildcards
@@ -1195,10 +1213,14 @@ class UmiAIWildcardNodeLite:
             inputs["optional"]["danbooru_threshold"] = ("FLOAT", {"default": 0.70, "min": 0.1, "max": 1.0, "step": 0.05})
             inputs["optional"]["danbooru_max_tags"] = ("INT", {"default": 15, "min": 1, "max": 50})
 
+        # Add bypass phrases for conditional bypass nodes
+        inputs["optional"]["bypass_phrase"] = ("STRING", {"default": "", "multiline": False, "hidden": True})
+        inputs["optional"]["bypass_phrases"] = ("STRING", {"default": "", "multiline": False, "placeholder": "simple, test, auto"})
+
         return inputs
 
-    RETURN_TYPES = ("MODEL", "CLIP", "STRING", "STRING", "INT", "INT", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("model", "clip", "text", "negative_text", "width", "height", "lora_info", "input_text", "input_negative")
+    RETURN_TYPES = ("MODEL", "CLIP", "STRING", "STRING", "INT", "INT", "STRING", "STRING", "STRING", "STRING")
+    RETURN_NAMES = ("model", "clip", "text", "negative_text", "width", "height", "lora_info", "input_text", "input_negative", "bypass_matches")
     FUNCTION = "process"
     CATEGORY = "UmiAI"
     COLOR = "#47325e"
@@ -1274,6 +1296,169 @@ class UmiAIWildcardNodeLite:
 
         return " BREAK ".join(cleaned_parts)
 
+    def preview_bypass_matched(
+        self,
+        text,
+        seed,
+        bypass_phrase,
+        bypass_phrases,
+        input_negative="",
+        width=1024,
+        height=1024,
+        image_input=None,
+        vision_model="None",
+        refiner_model="None",
+        vision_temperature=0.6,
+        refiner_temperature=0.7,
+        max_tokens=800,
+        custom_system_prompt="",
+        danbooru_threshold=0.70,
+        danbooru_max_tags=15,
+    ):
+        """Compute bypass_matched using the same prompt expansion logic without loading LoRAs."""
+        auto_clean = UMI_SETTINGS.get('auto_clean', True)
+        error_lint = UMI_SETTINGS.get('error_lint', False)
+        use_folder_paths = UMI_SETTINGS.get('use_folder_paths', False)
+
+        # Strip comments: // toggles comment mode until newline or another //
+        text = strip_prompt_comments(text)
+
+        options = {
+            'verbose': False,
+            'seed': seed,
+            'use_folder_paths': use_folder_paths,
+            'rng_streams': UMI_SETTINGS.get('rng_streams', False),
+        }
+
+        all_wildcard_paths = get_all_wildcard_paths()
+        tag_loader = TagLoader(all_wildcard_paths, options)
+
+        tag_selector = TagSelector(tag_loader, options)
+        neg_gen = NegativePromptGenerator()
+
+        tag_replacer = TagReplacer(tag_selector)
+        dynamic_replacer = DynamicPromptReplacer(seed)
+        conditional_replacer = ConditionalReplacer()
+        variable_replacer = VariableReplacer()
+
+        # Initialize optional replacers based on settings
+        if UMI_SETTINGS.get('enable_llm_features', False):
+            from .nodes import VisionReplacer, LLMReplacer
+            vision_replacer = VisionReplacer(self, vision_model, refiner_model, vision_temperature, refiner_temperature, max_tokens, image_input)
+            llm_replacer = LLMReplacer(self, refiner_model, refiner_temperature, max_tokens, custom_system_prompt)
+        else:
+            vision_replacer = None
+            llm_replacer = None
+
+        if UMI_SETTINGS.get('enable_danbooru_features', False):
+            from .nodes import DanbooruReplacer
+            danbooru_replacer = DanbooruReplacer(options)
+        else:
+            danbooru_replacer = None
+
+        # Load globals
+        globals_dict = tag_loader.load_globals()
+        variable_replacer.load_globals(globals_dict)
+
+        # Inject error_lint setting as failfast variable in both variable_replacer and tag_selector
+        if error_lint:
+            variable_replacer.variables['fail_fast'] = '1'
+            variable_replacer.variables['failfast'] = '1'
+            tag_selector.variables['fail_fast'] = '1'
+            tag_selector.variables['failfast'] = '1'
+
+        prompt = text
+        previous_prompt = ""
+        iterations = 0
+        prompt_history = []  # Track prompts for cycle detection
+        tag_selector.clear_seeded_values()
+
+        # Main processing loop
+        while previous_prompt != prompt and iterations < 50:
+            # Cycle detection: check if we've seen this exact prompt before
+            if prompt in prompt_history:
+                print(f"[UmiAI Lite] WARNING: Cycle detected in prompt processing. Breaking loop to prevent infinite recursion.")
+                print(f"[UmiAI Lite] Problematic prompt fragment: {prompt[:100]}...")
+                break
+
+            prompt_history.append(prompt)
+            previous_prompt = prompt
+
+            # Pre-expand prompt files so variables apply in the same pass
+            prompt = expand_prompt_files(prompt, tag_loader)
+
+            prompt = variable_replacer.store_variables(prompt, tag_replacer, dynamic_replacer)
+            tag_selector.update_variables(variable_replacer.variables)
+            prompt = variable_replacer.replace_variables(prompt)
+
+            masked_prompt, if_blocks = conditional_replacer.mask_conditionals(prompt)
+
+            # Process Vision and LLM tags if enabled (skip conditional blocks)
+            if vision_replacer:
+                masked_prompt = vision_replacer.replace(masked_prompt)
+            if llm_replacer:
+                masked_prompt = llm_replacer.replace(masked_prompt)
+
+            masked_prompt = CharacterReplacer.replace(masked_prompt)  # @@character:outfit:emotion@@
+            masked_prompt = tag_replacer.replace(masked_prompt)
+            masked_prompt = dynamic_replacer.replace(masked_prompt)
+
+            # Process Danbooru tags if enabled
+            if danbooru_replacer:
+                masked_prompt = danbooru_replacer.replace(masked_prompt, danbooru_threshold, danbooru_max_tags)
+
+            prompt = conditional_replacer.unmask_conditionals(masked_prompt, if_blocks)
+            prompt = conditional_replacer.replace(prompt, variable_replacer.variables)
+
+            # Capture assignments revealed by conditionals in the same iteration
+            prompt = variable_replacer.store_variables(prompt, tag_replacer, dynamic_replacer)
+            tag_selector.update_variables(variable_replacer.variables)
+            prompt = variable_replacer.replace_variables(prompt)
+            iterations += 1
+
+        # Warn if we hit the iteration limit
+        if iterations >= 50:
+            umi_debug_print(f"[UmiAI Lite] WARNING: Reached maximum processing iterations (50). Possible recursive wildcards or variables.")
+
+        # Apply conditional logic (in case any remain after loop)
+        prompt = conditional_replacer.replace(prompt, variable_replacer.variables)
+
+        # Add prefixes and suffixes
+        additions = tag_selector.get_prefixes_and_suffixes()
+        if additions['prefixes']:
+            prompt = ", ".join(additions['prefixes']) + ", " + prompt
+        if additions['suffixes']:
+            prompt = prompt + ", " + ", ".join(additions['suffixes'])
+
+        if additions['neg_prefixes']:
+            neg_gen.add_list(additions['neg_prefixes'])
+        if additions['neg_suffixes']:
+            neg_gen.add_list(additions['neg_suffixes'])
+        if tag_selector.scoped_negatives:
+            neg_gen.add_list(tag_selector.scoped_negatives)
+
+        # Strip negative tags from prompt
+        prompt = neg_gen.strip_negative_tags(prompt)
+
+        # Cleanup (enhanced with BREAK handling if auto_clean enabled)
+        if auto_clean:
+            prompt = self.clean_prompt(prompt)
+        else:
+            prompt = re.sub(r',\s*,', ',', prompt)
+            prompt = re.sub(r'\s+', ' ', prompt).strip().strip(',')
+
+        if tag_selector.is_trace_enabled():
+            prompt = append_trace_summary(prompt, variable_replacer.variables)
+        if tag_selector.is_debug_enabled():
+            prompt = append_debug_summary(prompt, variable_replacer.variables)
+
+        bypass_matched = bool(bypass_phrase) and bypass_phrase in prompt
+        bypass_list = []
+        if bypass_phrases:
+            phrases = [p.strip() for p in bypass_phrases.split(",") if p.strip()]
+            bypass_list = [phrase in prompt for phrase in phrases]
+        return bypass_matched, prompt, bypass_list
+
     def process(self, **kwargs):
         # Check if auto-update was requested (LLM feature)
         if UMI_SETTINGS.get('enable_llm_features', False):
@@ -1285,6 +1470,56 @@ class UmiAIWildcardNodeLite:
                     raise Exception("Auto-Update Complete! Please Restart ComfyUI now.")
                 else:
                     raise Exception("Auto-Update Failed! Check console for errors.")
+
+        # Check for frozen text from auto-requeue (bypass wildcard processing)
+        frozen_text = kwargs.get("_frozen_text", None)
+        frozen_negative = kwargs.get("_frozen_negative", None)
+        frozen_seed = kwargs.get("_frozen_seed", None)
+
+        if frozen_text:
+            print(f"[UmiAI Lite] Using FROZEN prompt from auto-requeue (skipping wildcard processing)")
+            print(f"[UmiAI Lite] Frozen text: {frozen_text[:100]}...")
+
+            # Get basic parameters
+            model = kwargs.get("model", None)
+            clip = kwargs.get("clip", None)
+            width = self.get_val(kwargs, "width", 1024, int)
+            height = self.get_val(kwargs, "height", 1024, int)
+            lora_tags_behavior = self.get_val(kwargs, "lora_tags_behavior", "Append to Prompt", str)
+            lora_cache_limit = self.get_val(kwargs, "lora_cache_limit", 5, int)
+            bypass_phrase = kwargs.get("bypass_phrase", "")
+            bypass_phrases = kwargs.get("bypass_phrases", "")
+
+            # Use frozen values
+            prompt = frozen_text
+            final_negative = frozen_negative if frozen_negative else ""
+            seed = frozen_seed if frozen_seed is not None else self.get_val(kwargs, "seed", 0, int)
+
+            # Still need to extract LoRAs from the frozen prompt
+            lora_handler = LoRAHandler()
+            prompt, final_model, final_clip, lora_info = lora_handler.extract_and_load(
+                prompt, model, clip, lora_tags_behavior, lora_cache_limit
+            )
+
+            # Calculate bypass_matched and bypass_matches
+            bypass_matched = bool(bypass_phrase) and bypass_phrase in prompt
+            bypass_list = []
+            if bypass_phrases:
+                phrases = [p.strip() for p in bypass_phrases.split(",") if p.strip()]
+                bypass_list = [phrase in prompt for phrase in phrases]
+            bypass_matches = json.dumps(bypass_list)
+
+            # Extract settings
+            prompt, settings = self.extract_settings(prompt)
+            final_width = settings['width'] if settings['width'] > 0 else width
+            final_height = settings['height'] if settings['height'] > 0 else height
+
+            # Log to history
+            log_prompt_to_history(prompt, final_negative, seed)
+
+            # Return immediately with frozen values
+            print(f"[UmiAI Lite] Returning frozen prompt (bypass_matched={bypass_matched})")
+            return (final_model, final_clip, prompt, final_negative, final_width, final_height, lora_info, frozen_text, frozen_negative, bypass_matches)
 
         text = self.get_val(kwargs, "text", "", str)
         seed = self.get_val(kwargs, "seed", 0, int)
@@ -1473,6 +1708,16 @@ class UmiAIWildcardNodeLite:
         if tag_selector.is_debug_enabled():
             prompt = append_debug_summary(prompt, variable_replacer.variables)
 
+        # Calculate bypass_matched for conditional bypass nodes before LoRA extraction
+        bypass_phrase = kwargs.get("bypass_phrase", "")
+        bypass_phrases = kwargs.get("bypass_phrases", "")
+        bypass_matched = bool(bypass_phrase) and bypass_phrase in prompt
+        bypass_list = []
+        if bypass_phrases:
+            phrases = [p.strip() for p in bypass_phrases.split(",") if p.strip()]
+            bypass_list = [phrase in prompt for phrase in phrases]
+        bypass_matches = json.dumps(bypass_list)
+
         # Extract and load LoRAs
         prompt, final_model, final_clip, lora_info = lora_handler.extract_and_load(prompt, model, clip, lora_tags_behavior, lora_cache_limit)
 
@@ -1492,7 +1737,118 @@ class UmiAIWildcardNodeLite:
         # Phase 8: Log prompt to history
         log_prompt_to_history(prompt, final_negative, seed)
 
-        return (final_model, final_clip, prompt, final_negative, final_width, final_height, lora_info, text, input_negative)
+        if UMI_SETTINGS.get('enable_debug_output', False):
+            if bypass_phrase:
+                umi_debug_print(f"[Wildcard] Bypass phrase '{bypass_phrase}' {'FOUND' if bypass_matched else 'NOT FOUND'} in prompt")
+
+        return (final_model, final_clip, prompt, final_negative, final_width, final_height, lora_info, text, input_negative, bypass_matches)
+
+
+# ==============================================================================
+# TEXT BYPASS HELPER NODE
+# ==============================================================================
+class UmiTextBypass:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "passthrough_type": (["IMAGE", "LATENT", "CONDITIONING", "MODEL", "CLIP", "STRING"], {"default": "IMAGE"}),
+            },
+            "optional": {
+                "matched_list": ("STRING", {"default": "", "multiline": False, "forceInput": True}),
+                "match_index": ("INT", {"default": 0, "min": 0, "max": 1024, "step": 1}),
+                "image": ("IMAGE",),
+                "latent": ("LATENT",),
+                "conditioning": ("CONDITIONING",),
+                "model": ("MODEL",),
+                "clip": ("CLIP",),
+                "string": ("STRING", {"multiline": True, "forceInput": True}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "LATENT", "CONDITIONING", "MODEL", "CLIP", "STRING")
+    RETURN_NAMES = ("image", "latent", "conditioning", "model", "clip", "string")
+    FUNCTION = "run"
+    CATEGORY = "UmiAI"
+
+    def run(self, passthrough_type, matched_list=None, match_index=0,
+            image=None, latent=None, conditioning=None, model=None, clip=None, string=None):
+
+        effective_matched = True
+        if matched_list:
+            try:
+                parsed = matched_list
+                if isinstance(matched_list, str):
+                    parsed = json.loads(matched_list)
+                if isinstance(parsed, list) and 0 <= int(match_index) < len(parsed):
+                    effective_matched = bool(parsed[int(match_index)])
+            except Exception:
+                pass
+
+        print(f"[UmiTextBypass BACKEND] Executing!")
+        print(f"[UmiTextBypass BACKEND] matched input: (effective={effective_matched})")
+        print(f"[UmiTextBypass BACKEND] passthrough_type: {passthrough_type}")
+
+        blocker_cls = _get_execution_blocker_class()
+        backend_controls = blocker_cls is not None
+
+        # Check if we need to trigger a state change and restart
+        # This happens BEFORE we continue downstream
+        needs_restart = False
+        try:
+            from server import PromptServer
+            # Send a pre-check signal to ask frontend if state needs changing
+            PromptServer.instance.send_sync(
+                "umi_bypass_precheck",
+                {"matched": effective_matched, "check_state": True},
+            )
+            print(f"[UmiTextBypass BACKEND] Sent precheck signal: matched={effective_matched}")
+        except Exception as e:
+            print(f"[UmiTextBypass BACKEND] Failed to send precheck: {e}")
+
+        # Send matched status to frontend immediately
+        try:
+            from server import PromptServer
+            PromptServer.instance.send_sync(
+                "umi_bypass_signal",
+                {"matched": effective_matched, "backend_controls": backend_controls, "needs_restart": needs_restart},
+            )
+            print(f"[UmiTextBypass BACKEND] Sent bypass signal: matched={effective_matched}, backend_controls={backend_controls}")
+        except Exception as e:
+            print(f"[UmiTextBypass BACKEND] Failed to send signal: {e}")
+
+        # If ExecutionBlocker is available, stop downstream execution immediately
+        if not effective_matched and blocker_cls is not None:
+            blocker = blocker_cls()
+            print("[UmiTextBypass BACKEND] Blocking downstream execution via ExecutionBlocker")
+            return (blocker, blocker, blocker, blocker, blocker, blocker)
+
+        # Always pass through - the matched boolean is informational only
+        out_image = None
+        out_latent = None
+        out_conditioning = None
+        out_model = None
+        out_clip = None
+        out_string = None
+
+        if passthrough_type == "IMAGE":
+            out_image = image
+        elif passthrough_type == "LATENT":
+            out_latent = latent
+        elif passthrough_type == "CONDITIONING":
+            out_conditioning = conditioning
+        elif passthrough_type == "MODEL":
+            out_model = model
+        elif passthrough_type == "CLIP":
+            out_clip = clip
+        elif passthrough_type == "STRING":
+            out_string = string
+
+        status = "MATCHED" if effective_matched else "NOT MATCHED"
+        print(f"[UmiTextBypass BACKEND] {status} - passing through {passthrough_type}")
+        if blocker_cls is None:
+            print("[UmiTextBypass BACKEND] Note: ExecutionBlocker unavailable - frontend bypass may be used")
+        return (out_image, out_latent, out_conditioning, out_model, out_clip, out_string)
 
 NODE_CLASS_MAPPINGS = {
     "UmiAIWildcardNodeLite": UmiAIWildcardNodeLite,

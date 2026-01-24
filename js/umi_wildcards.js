@@ -1343,6 +1343,19 @@ app.registerExtension({
             // ============================================================
             // DYNAMIC WIDGET VISIBILITY LOGIC
             // ============================================================
+            const legacyBypassWidget = this.widgets.find(w => w.name === "bypass_phrase");
+            if (legacyBypassWidget) {
+                legacyBypassWidget.type = "hidden";
+                legacyBypassWidget.hidden = true;
+                legacyBypassWidget.computeSize = () => [0, -4];
+                this.setSize(this.computeSize());
+            }
+            const legacyBypassOutputIndex = this.outputs?.findIndex(o => o?.name === "bypass_matched");
+            if (legacyBypassOutputIndex !== undefined && legacyBypassOutputIndex >= 0) {
+                this.removeOutput(legacyBypassOutputIndex);
+                this.setSize(this.computeSize());
+            }
+
             const llmWidgets = ["llm_model", "llm_temperature", "llm_max_tokens", "custom_system_prompt"];
             const triggerName = "llm_prompt_enhancer";
 

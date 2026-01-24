@@ -129,6 +129,7 @@ This custom node package has been streamlined to focus on core functionality. Th
 * **UmiSaveImage**: Enhanced image saving with metadata
 * **UmiModelManager**: Download and manage recommended models
 * **UmiModelSelector**: Model selection helper
+* **UmiTextBypass**: Conditional passthrough node that can bypass downstream nodes based on wildcard phrase matches
 
 ### Disabled Nodes (Hidden from Menu)
 The following nodes are disabled by default but can be re-enabled by uncommenting imports in `__init__.py`:
@@ -147,6 +148,36 @@ The following nodes are disabled by default but can be re-enabled by uncommentin
 * `camerangle` - 3D camera angle selector
 
 **Note:** Most advanced features (character consistency, pose library, camera control, dataset generation) were originally in separate nodes but are now integrated into the main wildcard processor or disabled to simplify the node list.
+
+---
+
+## ✅ UmiTextBypass (Conditional Bypass)
+
+Use this node to **conditionally skip downstream nodes** based on phrases found in the generated prompt. It's useful for optional steps like background removal, post-processing, or alternate branches.
+
+**How it works:**
+- In **UmiAIWildcardNode**, set `bypass_phrases` (comma-separated).
+- It outputs `bypass_matches` (JSON list of booleans).
+- In **UmiTextBypass**, connect `bypass_matches` → `matched_list` and set `match_index`.
+- When the selected match is false, downstream nodes are bypassed (via frontend toggle / next-run behavior).
+
+**Example use case:** Only run Remove Background when the prompt includes "simple background".
+
+**Wiring diagram (simplified):**
+```text
+[UmiAIWildcardNode]
+  - bypass_phrases: "simple background, studio"
+  -> bypass_matches ---------------------------+
+                                              |
+                                              v
+                                      [UmiTextBypass]
+                                       - matched_list
+                                       - match_index: 0
+                                       - passthrough_type: IMAGE
+                                              |
+                                              v
+                                      [Remove Background]
+```
 
 ---
 
