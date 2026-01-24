@@ -1774,7 +1774,7 @@ class UmiTextBypass:
     def run(self, passthrough_type, matched_list=None, match_index=0,
             image=None, latent=None, conditioning=None, model=None, clip=None, string=None):
 
-        effective_matched = True
+        effective_matched = False
         if matched_list:
             try:
                 parsed = matched_list

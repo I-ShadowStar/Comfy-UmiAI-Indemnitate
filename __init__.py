@@ -1775,6 +1775,8 @@ def _umi_bypass_prompt_handler(prompt_payload):
                 match_index = _umi_parse_match_index(match_index_input)
                 if match_index is not None and 0 <= match_index < len(matched_list):
                     matched_value = bool(matched_list[match_index])
+                else:
+                    matched_value = False
 
             if matched_value is None:
                 if _umi_is_link_value(matched_input):
